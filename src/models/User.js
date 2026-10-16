@@ -7,7 +7,16 @@ const userSchema = new mongoose.Schema(
     contactNumber: { type: String, required: true, unique: true, trim: true },
     passwordHash: { type: String, required: true },
     role: { type: String, enum: ["customer", "staff", "admin"], default: "customer" },
-    isActive: { type: Boolean, default: true },
+    status: {
+      type: String,
+      enum: ["active", "deactivated", "disabled", "closed"],
+      default: "active",
+    },
+    isVerified: { type: Boolean, default: false },
+    notificationPreferences: {
+      email: { type: Boolean, default: true },
+      sms: { type: Boolean, default: false },
+    },
   },
   { timestamps: true }
 );
