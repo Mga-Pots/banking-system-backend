@@ -18,17 +18,25 @@ export const createAccountFor = async (ownerId, session) => {
 };
 
 // Returns the owner's account, lazily creating one for users registered before accounts existed.
-export const getOrCreateAccount = async (ownerId) => {
-  const existing = await BankAccount.findOne({ owner: ownerId });
+// Pass a session to join an existing transaction.
+export const getOrCreateAccount = async (ownerId, session) => {
+  const existing = await BankAccount.findOne({ owner: ownerId }).session(session ?? null);
   if (existing) return existing;
   try {
-    return await createAccountFor(ownerId);
+    return await createAccountFor(ownerId, session);
   } catch (err) {
     // A concurrent request may have created it first (owner is unique).
     if (err.code === 11000) {
-      const created = await BankAccount.findOne({ owner: ownerId });
+      const created = await BankAccount.findOne({ owner: ownerId }).session(session ?? null);
       if (created) return created;
     }
     throw err;
   }
+};
+
+// Strips whitespace and returns the 12-digit account number, or null if the input is invalid.
+export const normalizeAccountNumber = (raw) => {
+  if (typeof raw !== "string") return null;
+  const normalized = raw.replace(/\s+/g, "");
+  return /^\d{12}$/.test(normalized) ? normalized : null;
 };

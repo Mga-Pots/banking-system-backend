@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import BankAccount from "../models/BankAccount.js";
-import { getOrCreateAccount } from "../utils/account.js";
+import { getOrCreateAccount, normalizeAccountNumber } from "../utils/account.js";
 
 const fail = (res, code, message) => res.status(code).json({ success: false, message });
 
@@ -49,5 +49,49 @@ export const getAccountById = async (req, res) => {
   } catch (err) {
     console.error("Get account by id error:", err);
     fail(res, 500, "Unable to fetch account");
+  }
+};
+
+const getInitials = (name = "") =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase())
+    .slice(0, 2)
+    .join("");
+
+// "Juan Dela Cruz" -> "Juan C." (first name + last initial only)
+const maskName = (name = "") => {
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return parts[0] ?? "";
+  return `${parts[0]} ${parts[parts.length - 1][0].toUpperCase()}.`;
+};
+
+export const lookupAccount = async (req, res) => {
+  const accountNumber = normalizeAccountNumber(req.params.accountNumber);
+  if (!accountNumber) return fail(res, 400, "Account number must be a 12-digit number");
+
+  try {
+    const account = await BankAccount.findOne({ accountNumber }).populate("owner", "name");
+    if (!account) return fail(res, 404, "Account not found");
+
+    if (account.owner?._id?.toString() === req.user._id.toString()) {
+      return fail(res, 400, "You can't send money to your own account");
+    }
+    if (account.status !== "active") {
+      return fail(res, 403, "Recipient account cannot receive money");
+    }
+
+    const ownerName = account.owner?.name ?? "";
+    const recipient = {
+      accountNumber: account.accountNumber,
+      status: account.status,
+      initials: getInitials(ownerName),
+      displayName: maskName(ownerName),
+    };
+    res.status(200).json({ success: true, ...recipient, data: recipient });
+  } catch (err) {
+    console.error("Lookup account error:", err);
+    fail(res, 500, "Unable to look up account");
   }
 };
