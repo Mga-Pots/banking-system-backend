@@ -1,6 +1,8 @@
 import express from "express";
 import cors from "cors";
 import authRoutes from "./routes/authRoutes.js";
+import transactionRoutes from "./routes/transactionRoutes.js";
+import accountRoutes from "./routes/accountRoutes.js";
 
 const app = express();
 
@@ -9,6 +11,8 @@ app.use(express.json());
 
 app.get("/api/health", (req, res) => res.json({ success: true, data: { status: "ok" } }));
 app.use("/api/auth", authRoutes);
+app.use("/api/transactions", transactionRoutes);
+app.use("/api/accounts", accountRoutes);
 
 app.use((req, res) => res.status(404).json({ success: false, message: "Route not found" }));
 
