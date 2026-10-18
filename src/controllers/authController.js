@@ -1,6 +1,8 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 import User from "../models/User.js";
+import { createAccountFor } from "../utils/account.js";
 
 const sign = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN });
@@ -28,10 +30,16 @@ export const register = async (req, res) => {
   if (password.length < 8) {
     return fail(res, 400, "Password must be at least 8 characters");
   }
+  const session = await mongoose.startSession();
   try {
     const passwordHash = await bcrypt.hash(password, 10);
-    // role is never read from the request body
-    const user = await User.create({ name, email, contactNumber, passwordHash });
+    let user;
+    // User and BankAccount are created together so neither exists without the other
+    await session.withTransaction(async () => {
+      // role is never read from the request body
+      [user] = await User.create([{ name, email, contactNumber, passwordHash }], { session });
+      await createAccountFor(user._id, session);
+    });
     res.status(201).json({
       success: true,
       data: { user: publicUser(user), token: sign(user._id) },
@@ -39,6 +47,8 @@ export const register = async (req, res) => {
   } catch (err) {
     if (err.code === 11000) return fail(res, 409, "Email or contact number already used");
     throw err;
+  } finally {
+    await session.endSession();
   }
 };
 

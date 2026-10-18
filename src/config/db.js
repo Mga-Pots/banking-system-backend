@@ -1,4 +1,8 @@
+import dns from "node:dns";
 import mongoose from "mongoose";
+
+// Some ISPs/routers refuse SRV lookups (querySrv ECONNREFUSED); use public DNS.
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
 
 export const connectDB = async () => {
   const { DB_USER, DB_PASS, DB_HOST, DB_NAME } = process.env;
