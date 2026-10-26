@@ -516,3 +516,264 @@ export const cancelTransaction = async (req, res) => {
     await session.endSession();
   }
 };
+
+
+export const getPendingTransfers = async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
+
+  try {
+    const filter = {
+      transactionType: "transfer",
+      status: "pending",
+    };
+
+    const [transactions, total] = await Promise.all([
+      Transaction.find(filter)
+        .sort({ createdAt: 1, _id: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate(accountPopulate("sourceAccount", "name email"))
+        .populate(accountPopulate("destinationAccount", "name email"))
+        .populate("performedBy", "name email")
+        .lean(),
+
+      Transaction.countDocuments(filter),
+    ]);
+
+    const items = transactions.map((txn) => formatTransaction(txn));
+
+    return res.status(200).json({
+      success: true,
+      transactions: items,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+      data: {
+        transactions: items,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
+    });
+  } catch (err) {
+    console.error("Get pending transfers error:", err);
+    return fail(res, 500, "Unable to fetch pending transfers");
+  }
+};
+
+export const approveTransfer = async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return fail(res, 400, "Invalid transaction ID");
+  }
+
+  const session = await mongoose.startSession();
+
+  try {
+    let destinationBalance;
+
+    await session.withTransaction(async () => {
+      const txn = await Transaction.findById(id).session(session);
+
+      if (!txn) {
+        throw httpError(404, "Transaction not found");
+      }
+
+      if (txn.transactionType !== "transfer") {
+        throw httpError(400, "Only transfers can be approved");
+      }
+
+      if (txn.status !== "pending") {
+        throw httpError(400, "Only pending transfers can be approved");
+      }
+
+      if (!txn.sourceAccount || !txn.destinationAccount) {
+        throw httpError(400, "Transfer is missing account information");
+      }
+
+      const destinationAccount = await BankAccount.findById(
+        txn.destinationAccount
+      ).session(session);
+
+      if (!destinationAccount) {
+        throw httpError(404, "Recipient account not found");
+      }
+
+      if (destinationAccount.status !== "active") {
+        throw httpError(
+          403,
+          "Recipient account is not active; reject the transfer if it cannot be completed"
+        );
+      }
+
+      // Claim the pending transaction before crediting the recipient.
+      // The conditional update prevents processing an already-resolved transfer.
+      const approved = await Transaction.findOneAndUpdate(
+        {
+          _id: txn._id,
+          transactionType: "transfer",
+          status: "pending",
+        },
+        {
+          $set: { status: "completed" },
+        },
+        {
+          new: true,
+          session,
+        }
+      );
+
+      if (!approved) {
+        throw httpError(400, "Transfer has already been reviewed");
+      }
+
+      // The sender was debited when the transfer was created.
+      // Approval only credits the recipient.
+      destinationAccount.balance = round2(
+        destinationAccount.balance + txn.amount
+      );
+
+      await destinationAccount.save({ session });
+
+      destinationBalance = destinationAccount.balance;
+    });
+
+    const updated = await Transaction.findById(id)
+      .populate(accountPopulate("sourceAccount", "name email"))
+      .populate(accountPopulate("destinationAccount", "name email"))
+      .populate("performedBy", "name email")
+      .lean();
+
+    const transaction = formatTransaction(updated);
+
+    return res.status(200).json({
+      success: true,
+      message: "Transfer approved successfully",
+      status: updated.status,
+      newBalance: destinationBalance,
+      transaction,
+      data: {
+        status: updated.status,
+        newBalance: destinationBalance,
+        transaction,
+      },
+    });
+  } catch (err) {
+    if (err.status) {
+      return fail(res, err.status, err.message);
+    }
+
+    console.error("Approve transfer error:", err);
+    return fail(res, 500, "Unable to approve transfer");
+  } finally {
+    await session.endSession();
+  }
+};
+
+export const rejectTransfer = async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return fail(res, 400, "Invalid transaction ID");
+  }
+
+  const session = await mongoose.startSession();
+
+  try {
+    let sourceBalance;
+
+    await session.withTransaction(async () => {
+      const txn = await Transaction.findById(id).session(session);
+
+      if (!txn) {
+        throw httpError(404, "Transaction not found");
+      }
+
+      if (txn.transactionType !== "transfer") {
+        throw httpError(400, "Only transfers can be rejected");
+      }
+
+      if (txn.status !== "pending") {
+        throw httpError(400, "Only pending transfers can be rejected");
+      }
+
+      if (!txn.sourceAccount) {
+        throw httpError(400, "Transfer is missing its source account");
+      }
+
+      const sourceAccount = await BankAccount.findById(
+        txn.sourceAccount
+      ).session(session);
+
+      if (!sourceAccount) {
+        throw httpError(404, "Sender account not found");
+      }
+
+      // Claim the pending transaction before issuing the refund.
+      const rejected = await Transaction.findOneAndUpdate(
+        {
+          _id: txn._id,
+          transactionType: "transfer",
+          status: "pending",
+        },
+        {
+          $set: { status: "failed" },
+        },
+        {
+          new: true,
+          session,
+        }
+      );
+
+      if (!rejected) {
+        throw httpError(400, "Transfer has already been reviewed");
+      }
+
+      // Refund the sender even if their account is now frozen or closed.
+      sourceAccount.balance = round2(sourceAccount.balance + txn.amount);
+
+      await sourceAccount.save({ session });
+
+      sourceBalance = sourceAccount.balance;
+    });
+
+    const updated = await Transaction.findById(id)
+      .populate(accountPopulate("sourceAccount", "name email"))
+      .populate(accountPopulate("destinationAccount", "name email"))
+      .populate("performedBy", "name email")
+      .lean();
+
+    const transaction = formatTransaction(updated);
+
+    return res.status(200).json({
+      success: true,
+      message: "Transfer rejected and sender refunded",
+      status: updated.status,
+      newBalance: sourceBalance,
+      transaction,
+      data: {
+        status: updated.status,
+        newBalance: sourceBalance,
+        transaction,
+      },
+    });
+  } catch (err) {
+    if (err.status) {
+      return fail(res, err.status, err.message);
+    }
+
+    console.error("Reject transfer error:", err);
+    return fail(res, 500, "Unable to reject transfer");
+  } finally {
+    await session.endSession();
+  }
+};
+
