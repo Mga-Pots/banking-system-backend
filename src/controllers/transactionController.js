@@ -5,22 +5,22 @@ import Transaction from "../models/Transaction.js";
 import { getOrCreateAccount, normalizeAccountNumber } from "../utils/account.js";
 
 const MAX_REFERENCE_ATTEMPTS = 5;
-// Transfers at or above this amount are held for staff review instead of completing immediately.
-const HOLD_THRESHOLD = 50000;
+// Transfers at or above this amount (in centavos) are held for staff review instead of completing immediately.
+const HOLD_THRESHOLD = 5000000; // ₱50,000.00 (5,000,000 centavos)
 const HOLD_REASON = "Held for staff review";
+const CASH_IN_LIMIT = 5000000; // ₱50,000.00 (5,000,000 centavos) per cash in
 
 const fail = (res, code, message) => res.status(code).json({ success: false, message });
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
-const round2 = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
+const round2 = (value) => Math.round(value);
 
-// Positive finite number with at most 2 decimal places.
+// Positive safe integer in centavos (e.g. ₱1.00 = 100 centavos)
 const isValidAmount = (amount) =>
   typeof amount === "number" &&
-  Number.isFinite(amount) &&
-  amount > 0 &&
-  Math.abs(amount * 100 - Math.round(amount * 100)) < 1e-6;
+  Number.isSafeInteger(amount) &&
+  amount > 0;
 
 // TXN-YYYYMMDD-XXXX, where XXXX is a random 4-digit number
 const generateReference = () => {
@@ -35,9 +35,12 @@ const isDuplicateReference = (err) =>
 export const cashIn = async (req, res) => {
   const amount = req.body?.amount;
   if (!isValidAmount(amount)) {
-    return fail(res, 400, "Amount must be a positive number with at most 2 decimal places");
+    return fail(res, 400, "Amount must be a positive integer in centavos");
   }
-  const value = round2(amount);
+  if (amount > CASH_IN_LIMIT) {
+    return fail(res, 400, "Cash-in limit of ₱50,000 per transaction exceeded");
+  }
+  const value = amount;
 
   const session = await mongoose.startSession();
   try {
@@ -107,9 +110,9 @@ export const transfer = async (req, res) => {
   const body = req.body ?? {};
   const amount = body.amount;
   if (!isValidAmount(amount)) {
-    return fail(res, 400, "Amount must be a positive number with at most 2 decimal places");
+    return fail(res, 400, "Amount must be a positive integer in centavos");
   }
-  const value = round2(amount);
+  const value = amount;
 
   const rawRecipient =
     body.recipientAccountNumber ?? body.destinationAccountNumber ?? body.accountNumber;
