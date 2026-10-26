@@ -8,7 +8,7 @@ const transactionSchema = new mongoose.Schema(
       enum: ["cash_in", "transfer"],
       required: true,
     },
-    amount: { type: Number, required: true, min: [0.01, "Amount must be positive"] },
+    amount: { type: Number, required: true, min: [1, "Amount must be at least 1 centavo"] },
     sourceAccount: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "BankAccount",
