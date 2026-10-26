@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import BankAccount from "../models/BankAccount.js";
 import Transaction from "../models/Transaction.js";
 import { getOrCreateAccount, normalizeAccountNumber } from "../utils/account.js";
+import { createNotification, formatPeso, formatAccountNumber } from "../utils/notification.js";
 
 const MAX_REFERENCE_ATTEMPTS = 5;
 // Transfers at or above this amount (in centavos) are held for staff review instead of completing immediately.
@@ -75,6 +76,14 @@ export const cashIn = async (req, res) => {
             ],
             { session }
           );
+
+          await createNotification({
+            recipient: req.user._id ?? req.user.id,
+            type: "transaction",
+            message: `Your cash in of ${formatPeso(value)} was successful.`,
+            relatedTransaction: txn._id,
+            session,
+          });
 
           result = {
             reference: txn.referenceNumber,
@@ -178,6 +187,32 @@ export const transfer = async (req, res) => {
             ],
             { session }
           );
+
+          if (holdForReview) {
+            await createNotification({
+              recipient: req.user._id,
+              type: "transaction",
+              message: `Your transfer of ${formatPeso(value)} to ${formatAccountNumber(destinationAccount.accountNumber)} is being held for review.`,
+              relatedTransaction: txn._id,
+              session,
+            });
+          } else {
+            await createNotification({
+              recipient: req.user._id,
+              type: "transaction",
+              message: `Your transfer of ${formatPeso(value)} to ${formatAccountNumber(destinationAccount.accountNumber)} was completed.`,
+              relatedTransaction: txn._id,
+              session,
+            });
+
+            await createNotification({
+              recipient: destinationAccount.owner,
+              type: "transaction",
+              message: `You received ${formatPeso(value)} from ${formatAccountNumber(sourceAccount.accountNumber)}.`,
+              relatedTransaction: txn._id,
+              session,
+            });
+          }
 
           result = {
             reference: txn.referenceNumber,
@@ -484,6 +519,14 @@ export const cancelTransaction = async (req, res) => {
       // Refund even if the sender's account has since been frozen or closed: it's their money.
       sourceAccount.balance = round2(sourceAccount.balance + txn.amount);
       await sourceAccount.save({ session });
+
+      await createNotification({
+        recipient: req.user._id,
+        type: "transaction",
+        message: `Your transfer of ${formatPeso(txn.amount)} was cancelled and refunded.`,
+        relatedTransaction: txn._id,
+        session,
+      });
 
       sourceAccountId = sourceAccount._id;
       newBalance = sourceAccount.balance;
