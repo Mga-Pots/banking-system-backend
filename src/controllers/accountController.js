@@ -95,3 +95,82 @@ export const lookupAccount = async (req, res) => {
     fail(res, 500, "Unable to look up account");
   }
 };
+
+
+export const freezeAccount = async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return fail(res, 400, "Invalid account ID");
+  }
+
+  if (!reason?.trim()) {
+    return fail(res, 400, "A reason is required to freeze an account");
+  }
+
+  try {
+    const account = await BankAccount.findById(id);
+
+    if (!account) {
+      return fail(res, 404, "Account not found");
+    }
+
+    if (account.status === "closed") {
+      return fail(res, 400, "Cannot freeze a closed account");
+    }
+
+    if (account.status === "frozen") {
+      return fail(res, 400, "Account is already frozen");
+    }
+
+    account.status = "frozen";
+    await account.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Account frozen successfully",
+      data: account,
+    });
+  } catch (err) {
+    console.error("Freeze account error:", err);
+    fail(res, 500, "Unable to freeze account");
+  }
+};
+
+export const unfreezeAccount = async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return fail(res, 400, "Invalid account ID");
+  }
+
+  try {
+    const account = await BankAccount.findById(id);
+
+    if (!account) {
+      return fail(res, 404, "Account not found");
+    }
+
+    if (account.status === "closed") {
+      return fail(res, 400, "Cannot unfreeze a closed account");
+    }
+
+    if (account.status === "active") {
+      return fail(res, 400, "Account is already active");
+    }
+
+    account.status = "active";
+    await account.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Account unfrozen successfully",
+      data: account,
+    });
+  } catch (err) {
+    console.error("Unfreeze account error:", err);
+    fail(res, 500, "Unable to unfreeze account");
+  }
+};
+
