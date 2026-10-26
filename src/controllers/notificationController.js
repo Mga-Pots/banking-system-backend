@@ -1,0 +1,159 @@
+import mongoose from "mongoose";
+import Notification from "../models/Notification.js";
+
+const fail = (res, code, message) => res.status(code).json({ success: false, message });
+
+/**
+ * GET /api/notifications
+ * Retrieves notifications for the logged-in user.
+ * Defaults to the latest 50 notifications sorted newest first.
+ */
+export const getMyNotifications = async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const skip = (page - 1) * limit;
+
+    const notifications = await Notification.find({ recipient: req.user._id })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: notifications,
+    });
+  } catch (err) {
+    console.error("Get notifications error:", err);
+    return fail(res, 500, "Unable to fetch notifications");
+  }
+};
+
+/**
+ * PATCH /api/notifications/:id/read
+ * Marks a single notification as read.
+ */
+export const markAsRead = async (req, res) => {
+  const { id } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return fail(res, 400, "Invalid notification ID");
+  }
+
+  try {
+    const notification = await Notification.findOneAndUpdate(
+      { _id: id, recipient: req.user._id },
+      { $set: { isRead: true } },
+      { new: true }
+    );
+
+    if (!notification) {
+      return fail(res, 404, "Notification not found");
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: notification,
+    });
+  } catch (err) {
+    console.error("Mark notification as read error:", err);
+    return fail(res, 500, "Unable to update notification");
+  }
+};
+
+/**
+ * PATCH /api/notifications/read-all
+ * Marks all notifications for the logged-in user as read.
+ */
+export const markAllAsRead = async (req, res) => {
+  try {
+    await Notification.updateMany(
+      { recipient: req.user._id, isRead: false },
+      { $set: { isRead: true } }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "All notifications marked as read",
+    });
+  } catch (err) {
+    console.error("Mark all notifications as read error:", err);
+    return fail(res, 500, "Unable to mark all notifications as read");
+  }
+};
+
+/**
+ * DELETE /api/notifications/:id
+ * Deletes a single notification.
+ */
+export const deleteNotification = async (req, res) => {
+  const { id } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return fail(res, 400, "Invalid notification ID");
+  }
+
+  try {
+    const notification = await Notification.findOneAndDelete({
+      _id: id,
+      recipient: req.user._id,
+    });
+
+    if (!notification) {
+      return fail(res, 404, "Notification not found");
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Notification deleted",
+    });
+  } catch (err) {
+    console.error("Delete notification error:", err);
+    return fail(res, 500, "Unable to delete notification");
+  }
+};
+
+/**
+ * DELETE /api/notifications
+ * Clears all notifications for the logged-in user.
+ */
+export const clearNotifications = async (req, res) => {
+  try {
+    await Notification.deleteMany({ recipient: req.user._id });
+
+    return res.status(200).json({
+      success: true,
+      message: "Notifications cleared",
+    });
+  } catch (err) {
+    console.error("Clear notifications error:", err);
+    return fail(res, 500, "Unable to clear notifications");
+  }
+};
+
+/**
+ * GET /api/admin/notifications
+ * Admin audit log: Retrieves system-wide notification history across all users.
+ */
+export const getAdminNotificationLogs = async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const skip = (page - 1) * limit;
+
+    const notifications = await Notification.find({})
+      .populate("recipient", "name email role")
+      .populate("relatedTransaction", "referenceNumber transactionType amount status")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: notifications,
+    });
+  } catch (err) {
+    console.error("Get admin notification logs error:", err);
+    return fail(res, 500, "Unable to fetch notification logs");
+  }
+};
