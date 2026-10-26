@@ -4,7 +4,7 @@ const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    contactNumber: { type: String, required: true, unique: true, trim: true },
+    contactNumber: { type: String, unique: true, sparse: true, trim: true },
     passwordHash: { type: String, required: true },
     role: { type: String, enum: ["customer", "staff", "admin"], default: "customer" },
     status: {
@@ -17,6 +17,8 @@ const userSchema = new mongoose.Schema(
       email: { type: Boolean, default: true },
       sms: { type: Boolean, default: false },
     },
+    failedLoginAttempts: { type: Number, default: 0 },
+    lockUntil: { type: Date, default: null },
   },
   { timestamps: true }
 );

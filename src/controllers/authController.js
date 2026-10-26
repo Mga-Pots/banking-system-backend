@@ -4,6 +4,9 @@ import mongoose from "mongoose";
 import User from "../models/User.js";
 import { createAccountFor } from "../utils/account.js";
 
+const MAX_LOGIN_ATTEMPTS = 3;
+const LOCK_MINUTES = 15;
+
 const sign = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN });
 
@@ -11,7 +14,7 @@ const publicUser = (u) => ({
   _id: u._id,
   name: u.name,
   email: u.email,
-  contactNumber: u.contactNumber,
+  contactNumber: u.contactNumber ?? "",
   role: u.role,
   status: u.status,
   isVerified: u.isVerified,
@@ -23,9 +26,12 @@ const publicUser = (u) => ({
 const fail = (res, code, message) => res.status(code).json({ success: false, message });
 
 export const register = async (req, res) => {
-  const { name, email, contactNumber, password } = req.body;
-  if (!name || !email || !contactNumber || !password) {
-    return fail(res, 400, "All fields are required");
+  const { name, email, password } = req.body;
+  // Contact number is optional: an empty value is stored as "not set"
+  const contactNumber = String(req.body.contactNumber ?? "").trim() || undefined;
+
+  if (!name || !email || !password) {
+    return fail(res, 400, "Name, email and password are required");
   }
   if (password.length < 8) {
     return fail(res, 400, "Password must be at least 8 characters");
@@ -33,13 +39,8 @@ export const register = async (req, res) => {
   const session = await mongoose.startSession();
   try {
     const passwordHash = await bcrypt.hash(password, 10);
-    let user;
-    // User and BankAccount are created together so neither exists without the other
-    await session.withTransaction(async () => {
-      // role is never read from the request body
-      [user] = await User.create([{ name, email, contactNumber, passwordHash }], { session });
-      await createAccountFor(user._id, session);
-    });
+    // role is never read from the request body
+    const user = await User.create({ name, email, contactNumber, passwordHash });
     res.status(201).json({
       success: true,
       data: { user: publicUser(user), token: sign(user._id) },
@@ -57,10 +58,44 @@ export const login = async (req, res) => {
   if (!email || !password) return fail(res, 400, "Email and password are required");
 
   const user = await User.findOne({ email: email.toLowerCase().trim() });
-  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-    return fail(res, 401, "Invalid email or password");
+  if (!user) return fail(res, 401, "Invalid email or password");
+
+  // Locked? Refuse even the correct password until the lock expires
+  if (user.lockUntil && user.lockUntil > Date.now()) {
+    const minutes = Math.ceil((user.lockUntil - Date.now()) / 60000);
+    return fail(res, 429, `Too many failed attempts. Try again in ${minutes} minute(s).`);
   }
+
+  const match = await bcrypt.compare(password, user.passwordHash);
+
+  if (!match) {
+    // $inc is atomic, so rapid-fire attempts can't slip past the count
+    const updated = await User.findByIdAndUpdate(
+      user._id,
+      { $inc: { failedLoginAttempts: 1 } },
+      { new: true }
+    );
+    const remaining = MAX_LOGIN_ATTEMPTS - updated.failedLoginAttempts;
+
+    if (remaining <= 0) {
+      await User.updateOne(
+        { _id: user._id },
+        {
+          failedLoginAttempts: 0,
+          lockUntil: new Date(Date.now() + LOCK_MINUTES * 60 * 1000),
+        }
+      );
+      return fail(res, 429, `Too many failed attempts. Account locked for ${LOCK_MINUTES} minutes.`);
+    }
+    return fail(res, 401, `Invalid email or password. ${remaining} attempt(s) left.`);
+  }
+
   if (user.status !== "active") return fail(res, 403, "This account is not active");
+
+  // Successful login: clear the counter and any expired lock
+  if (user.failedLoginAttempts > 0 || user.lockUntil) {
+    await User.updateOne({ _id: user._id }, { failedLoginAttempts: 0, lockUntil: null });
+  }
 
   res.json({ success: true, data: { user: publicUser(user), token: sign(user._id) } });
 };
