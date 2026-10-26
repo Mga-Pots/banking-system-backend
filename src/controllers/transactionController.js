@@ -33,6 +33,31 @@ const generateReference = () => {
 const isDuplicateReference = (err) =>
   err?.code === 11000 && (err.keyPattern?.referenceNumber || err.keyValue?.referenceNumber);
 
+// Populate an account strictly with its _id and accountNumber for customer transaction responses.
+const accountPopulate = (path) => ({
+  path,
+  select: "accountNumber",
+});
+
+// Formats a populated Transaction into the exact contract shape.
+const formatTransaction = (txn) => ({
+  _id: txn._id,
+  referenceNumber: txn.referenceNumber,
+  transactionType: txn.transactionType,
+  amount: txn.amount,
+  sourceAccount: txn.sourceAccount
+    ? { _id: txn.sourceAccount._id, accountNumber: txn.sourceAccount.accountNumber }
+    : null,
+  destinationAccount: txn.destinationAccount
+    ? { _id: txn.destinationAccount._id, accountNumber: txn.destinationAccount.accountNumber }
+    : null,
+  performedBy: txn.performedBy?._id ?? txn.performedBy,
+  status: txn.status,
+  flagReason: txn.flagReason ?? null,
+  createdAt: txn.createdAt,
+  updatedAt: txn.updatedAt,
+});
+
 export const cashIn = async (req, res) => {
   const amount = req.body?.amount;
   if (!isValidAmount(amount)) {
@@ -48,7 +73,7 @@ export const cashIn = async (req, res) => {
     // Ensures existing customers without an account don't hit a 404
     const { _id: accountId } = await getOrCreateAccount(req.user.id);
 
-    let result;
+    let createdTxnId;
     for (let attempt = 1; attempt <= MAX_REFERENCE_ATTEMPTS; attempt++) {
       const referenceNumber = generateReference();
       try {
@@ -85,13 +110,7 @@ export const cashIn = async (req, res) => {
             session,
           });
 
-          result = {
-            reference: txn.referenceNumber,
-            amount: txn.amount,
-            status: txn.status,
-            createdAt: txn.createdAt,
-            newBalance: account.balance,
-          };
+          createdTxnId = txn._id;
         });
         break;
       } catch (err) {
@@ -100,11 +119,14 @@ export const cashIn = async (req, res) => {
       }
     }
 
+    const populated = await Transaction.findById(createdTxnId)
+      .populate(accountPopulate("sourceAccount"))
+      .populate(accountPopulate("destinationAccount"))
+      .lean();
+
     return res.status(200).json({
       success: true,
-      message: "Cash in successful",
-      ...result,
-      data: { ...result },
+      data: formatTransaction(populated),
     });
   } catch (err) {
     if (err.status) return fail(res, err.status, err.message);
@@ -138,7 +160,7 @@ export const transfer = async (req, res) => {
     // can't abort (and be retried inside) the transfer's DB transaction.
     await getOrCreateAccount(req.user._id);
 
-    let result;
+    let createdTxnId;
     for (let attempt = 1; attempt <= MAX_REFERENCE_ATTEMPTS; attempt++) {
       const referenceNumber = generateReference();
       try {
@@ -214,16 +236,7 @@ export const transfer = async (req, res) => {
             });
           }
 
-          result = {
-            reference: txn.referenceNumber,
-            amount: txn.amount,
-            fee: 0,
-            fromAccount: sourceAccount.accountNumber,
-            toAccount: destinationAccount.accountNumber,
-            status: txn.status,
-            createdAt: txn.createdAt,
-            newBalance: sourceAccount.balance,
-          };
+          createdTxnId = txn._id;
         });
         break;
       } catch (err) {
@@ -232,11 +245,14 @@ export const transfer = async (req, res) => {
       }
     }
 
+    const populated = await Transaction.findById(createdTxnId)
+      .populate(accountPopulate("sourceAccount"))
+      .populate(accountPopulate("destinationAccount"))
+      .lean();
+
     return res.status(200).json({
       success: true,
-      message: "Transfer sent",
-      ...result,
-      data: { ...result },
+      data: formatTransaction(populated),
     });
   } catch (err) {
     if (err.status) return fail(res, err.status, err.message);
@@ -261,63 +277,9 @@ const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const idOf = (value) => value?._id ?? value ?? null;
 const sameId = (a, b) => a != null && b != null && String(idOf(a)) === String(idOf(b));
 
-// Populate an account with its number and its owner's (limited) details.
-const accountPopulate = (path, ownerFields = "name") => ({
-  path,
-  select: "accountNumber owner",
-  populate: { path: "owner", select: ownerFields },
-});
-
 const startOfMonth = () => {
   const d = new Date();
   return new Date(d.getFullYear(), d.getMonth(), 1);
-};
-
-// Adds the UI helper fields to a lean, populated transaction. With a viewerAccountId the
-// transaction is described from that customer's point of view; without one (staff/admin) it is neutral.
-const formatTransaction = (txn, viewerAccountId = null) => {
-  const { __v, ...rest } = txn;
-  const fromAccount = txn.sourceAccount?.accountNumber ?? null;
-  const toAccount = txn.destinationAccount?.accountNumber ?? null;
-  const isTransfer = txn.transactionType === "transfer";
-
-  const formatted = {
-    ...rest,
-    reference: txn.referenceNumber,
-    fee: 0,
-    fromAccount,
-    toAccount,
-  };
-
-  if (!viewerAccountId) {
-    return {
-      ...formatted,
-      direction: null,
-      signedAmount: null,
-      counterpartyAccountNumber: null,
-      label: isTransfer ? `From ${fromAccount} to ${toAccount}` : "Cash in",
-      canCancel: false,
-    };
-  }
-
-  const isSender = sameId(txn.sourceAccount, viewerAccountId);
-  const direction = isSender ? "out" : "in";
-
-  let label = "Cash in";
-  let counterpartyAccountNumber = null;
-  if (isTransfer) {
-    counterpartyAccountNumber = isSender ? toAccount : fromAccount;
-    label = isSender ? `To ${toAccount}` : `From ${fromAccount}`;
-  }
-
-  return {
-    ...formatted,
-    direction,
-    signedAmount: direction === "in" ? txn.amount : -txn.amount,
-    counterpartyAccountNumber,
-    label,
-    canCancel: txn.status === "pending" && isTransfer && isSender,
-  };
 };
 
 export const getTransactions = async (req, res) => {
@@ -424,14 +386,10 @@ export const getTransactions = async (req, res) => {
 
     const total = statusParam === "all" ? counts.all : counts[statusParam];
     const pagination = { page, limit, total, totalPages: Math.ceil(total / limit) };
-    const items = transactions.map((txn) => formatTransaction(txn, account._id));
+    const items = transactions.map((txn) => formatTransaction(txn));
 
     return res.status(200).json({
       success: true,
-      transactions: items,
-      pagination,
-      counts,
-      summary,
       data: { transactions: items, pagination, counts, summary },
     });
   } catch (err) {
@@ -446,20 +404,15 @@ export const getTransactionById = async (req, res) => {
 
   try {
     const isCustomer = req.user.role === "customer";
-    // Staff and admin get richer owner details than customers.
-    const ownerFields = isCustomer ? "name" : "name email";
 
     const txn = await Transaction.findById(id)
-      .populate(accountPopulate("sourceAccount", ownerFields))
-      .populate(accountPopulate("destinationAccount", ownerFields))
-      .populate("performedBy", isCustomer ? "name role" : "name email role")
+      .populate(accountPopulate("sourceAccount"))
+      .populate(accountPopulate("destinationAccount"))
       .lean();
     if (!txn) return fail(res, 404, "Transaction not found");
 
     if (!isCustomer) {
-      return res
-        .status(200)
-        .json({ success: true, transaction: formatTransaction(txn), data: formatTransaction(txn) });
+      return res.status(200).json({ success: true, data: formatTransaction(txn) });
     }
 
     // Customers don't need a lazily created account just to view a transaction.
@@ -476,8 +429,7 @@ export const getTransactionById = async (req, res) => {
       return fail(res, 403, "Forbidden");
     }
 
-    const transaction = formatTransaction(txn, accountId);
-    return res.status(200).json({ success: true, transaction, data: transaction });
+    return res.status(200).json({ success: true, data: formatTransaction(txn) });
   } catch (err) {
     console.error("Get transaction by id error:", err);
     return fail(res, 500, "Unable to fetch transaction");
@@ -490,9 +442,6 @@ export const cancelTransaction = async (req, res) => {
 
   const session = await mongoose.startSession();
   try {
-    let sourceAccountId;
-    let newBalance;
-
     await session.withTransaction(async () => {
       const txn = await Transaction.findById(id).session(session);
       if (!txn) throw httpError(404, "Transaction not found");
@@ -527,29 +476,16 @@ export const cancelTransaction = async (req, res) => {
         relatedTransaction: txn._id,
         session,
       });
-
-      sourceAccountId = sourceAccount._id;
-      newBalance = sourceAccount.balance;
     });
 
     const updated = await Transaction.findById(id)
       .populate(accountPopulate("sourceAccount"))
       .populate(accountPopulate("destinationAccount"))
       .lean();
-    const transaction = formatTransaction(updated, sourceAccountId);
 
-    const result = {
-      reference: updated.referenceNumber,
-      amount: updated.amount,
-      status: "cancelled",
-      newBalance,
-      transaction,
-    };
     return res.status(200).json({
       success: true,
-      message: "Transaction cancelled",
-      ...result,
-      data: { ...result },
+      data: formatTransaction(updated),
     });
   } catch (err) {
     if (err.status) return fail(res, err.status, err.message);

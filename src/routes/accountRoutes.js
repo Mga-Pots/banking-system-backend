@@ -3,6 +3,7 @@ import { Router } from "express";
 import {
   getMyAccount,
   getMyBalance,
+  getMyCardDetails,
   getAccountById,
   lookupAccount,
   freezeAccount,
@@ -15,6 +16,7 @@ const router = Router();
 // Customer routes
 router.get("/me", protect, authorize("customer"), getMyAccount);
 router.get("/me/balance", protect, authorize("customer"), getMyBalance);
+router.post("/me/card-details", protect, authorize("customer"), getMyCardDetails);
 router.get("/lookup/:accountNumber", protect, authorize("customer"), lookupAccount);
 
 // Staff/admin routes
