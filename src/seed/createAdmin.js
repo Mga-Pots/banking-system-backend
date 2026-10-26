@@ -21,6 +21,7 @@ if (await User.findOne({ email: ADMIN_EMAIL.toLowerCase() })) {
     contactNumber: "0000000000",
     passwordHash: await bcrypt.hash(ADMIN_PASSWORD, 10),
     role: "admin",
+    isVerified: true,
   });
   console.log("Admin created");
 }
