@@ -25,14 +25,14 @@ router.get("/lookup/:accountNumber", protect, authorize("customer"), lookupAccou
 router.patch(
   "/:id/freeze",
   protect,
-  authorize("staff", "admin"),
+  authorize("staff"),
   freezeAccount
 );
 
 router.patch(
   "/:id/unfreeze",
   protect,
-  authorize("staff", "admin"),
+  authorize("staff"),
   unfreezeAccount
 );
 
@@ -40,7 +40,7 @@ router.patch(
 router.get(
   "/:id",
   protect,
-  authorize("customer", "staff", "admin"),
+  authorize("customer", "staff"),
   getAccountById
 );
 

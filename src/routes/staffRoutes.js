@@ -13,36 +13,34 @@ const router = Router();
 
 router.use(protect);
 
-// Staff transaction operations.
-// Existing role permissions are preserved temporarily;
-// role restrictions will be handled in a separate step.
+
 router.get(
   "/transactions",
-  authorize("staff", "admin"),
+  authorize("staff"),
   getAllAdminTransactions
 );
 
 router.patch(
   "/transactions/:id/status",
-  authorize("staff", "admin"),
+  authorize("staff"),
   updateAdminTransactionStatus
 );
 
 router.get(
   "/transactions/review/pending",
-  authorize("staff", "admin"),
+  authorize("staff"),
   getPendingTransfers
 );
 
 router.patch(
   "/transactions/:id/approve",
-  authorize("staff", "admin"),
+  authorize("staff"),
   approveTransfer
 );
 
 router.patch(
   "/transactions/:id/reject",
-  authorize("staff", "admin"),
+  authorize("staff"),
   rejectTransfer
 );
 
