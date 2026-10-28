@@ -660,6 +660,25 @@ export const approveTransfer = async (req, res) => {
 
       await destinationAccount.save({ session });
 
+      const sourceAccount = await BankAccount.findById(txn.sourceAccount).session(session);
+      const senderUserId = sourceAccount?.owner ?? txn.performedBy;
+
+      await createNotification({
+        recipient: senderUserId,
+        type: "transaction",
+        message: `Your transfer of ${formatPeso(txn.amount)} to ${formatAccountNumber(destinationAccount.accountNumber)} was approved by staff and completed.`,
+        relatedTransaction: txn._id,
+        session,
+      });
+
+      await createNotification({
+        recipient: destinationAccount.owner,
+        type: "transaction",
+        message: `You received ${formatPeso(txn.amount)} from ${formatAccountNumber(sourceAccount?.accountNumber ?? "an external account")}.`,
+        relatedTransaction: txn._id,
+        session,
+      });
+
       destinationBalance = destinationAccount.balance;
     });
 
@@ -758,6 +777,15 @@ export const rejectTransfer = async (req, res) => {
       sourceAccount.balance = round2(sourceAccount.balance + txn.amount);
 
       await sourceAccount.save({ session });
+
+      const senderUserId = sourceAccount?.owner ?? txn.performedBy;
+      await createNotification({
+        recipient: senderUserId,
+        type: "transaction",
+        message: `Your transfer of ${formatPeso(txn.amount)} was rejected by staff and refunded to your account.`,
+        relatedTransaction: txn._id,
+        session,
+      });
 
       sourceBalance = sourceAccount.balance;
     });
@@ -889,6 +917,25 @@ export const updateAdminTransactionStatus = async (req, res) => {
 
         destinationAccount.balance = round2(destinationAccount.balance + txn.amount);
         await destinationAccount.save({ session });
+
+        const sourceAccount = await BankAccount.findById(txn.sourceAccount).session(session);
+        const senderUserId = sourceAccount?.owner ?? txn.performedBy;
+
+        await createNotification({
+          recipient: senderUserId,
+          type: "transaction",
+          message: `Your transfer of ${formatPeso(txn.amount)} to ${formatAccountNumber(destinationAccount.accountNumber)} was approved by staff and completed.`,
+          relatedTransaction: txn._id,
+          session,
+        });
+
+        await createNotification({
+          recipient: destinationAccount.owner,
+          type: "transaction",
+          message: `You received ${formatPeso(txn.amount)} from ${formatAccountNumber(sourceAccount?.accountNumber ?? "an external account")}.`,
+          relatedTransaction: txn._id,
+          session,
+        });
       } else {
         if (!txn.sourceAccount) {
           throw httpError(400, "Transfer is missing its source account");
@@ -911,6 +958,15 @@ export const updateAdminTransactionStatus = async (req, res) => {
 
         sourceAccount.balance = round2(sourceAccount.balance + txn.amount);
         await sourceAccount.save({ session });
+
+        const senderUserId = sourceAccount?.owner ?? txn.performedBy;
+        await createNotification({
+          recipient: senderUserId,
+          type: "transaction",
+          message: `Your transfer of ${formatPeso(txn.amount)} was rejected by staff and refunded to your account.`,
+          relatedTransaction: txn._id,
+          session,
+        });
       }
     });
 

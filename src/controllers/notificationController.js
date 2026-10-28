@@ -7,6 +7,7 @@ const fail = (res, code, message) => res.status(code).json({ success: false, mes
  * GET /api/notifications
  * Retrieves notifications for the logged-in user.
  * Defaults to the latest 50 notifications sorted newest first.
+ * Attaches X-Total-Count and X-Unread-Count response headers.
  */
 export const getMyNotifications = async (req, res) => {
   try {
@@ -14,11 +15,18 @@ export const getMyNotifications = async (req, res) => {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const skip = (page - 1) * limit;
 
-    const notifications = await Notification.find({ recipient: req.user._id })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
+    const [notifications, total, unreadCount] = await Promise.all([
+      Notification.find({ recipient: req.user._id })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Notification.countDocuments({ recipient: req.user._id }),
+      Notification.countDocuments({ recipient: req.user._id, isRead: false }),
+    ]);
+
+    res.set("X-Total-Count", String(total));
+    res.set("X-Unread-Count", String(unreadCount));
 
     return res.status(200).json({
       success: true,
@@ -27,6 +35,27 @@ export const getMyNotifications = async (req, res) => {
   } catch (err) {
     console.error("Get notifications error:", err);
     return fail(res, 500, "Unable to fetch notifications");
+  }
+};
+
+/**
+ * GET /api/notifications/unread-count
+ * Returns unread notification count for the logged-in user.
+ */
+export const getUnreadNotificationCount = async (req, res) => {
+  try {
+    const unreadCount = await Notification.countDocuments({
+      recipient: req.user._id,
+      isRead: false,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: { unreadCount },
+    });
+  } catch (err) {
+    console.error("Get unread count error:", err);
+    return fail(res, 500, "Unable to count unread notifications");
   }
 };
 

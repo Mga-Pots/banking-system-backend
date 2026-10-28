@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import User from "../models/User.js";
 import { createAccountFor } from "../utils/account.js";
+import { createNotification } from "../utils/notification.js";
 
 const MAX_LOGIN_ATTEMPTS = 3;
 const LOCK_MINUTES = 15;
@@ -85,6 +86,11 @@ export const login = async (req, res) => {
           lockUntil: new Date(Date.now() + LOCK_MINUTES * 60 * 1000),
         }
       );
+      await createNotification({
+        recipient: user._id,
+        type: "security",
+        message: `Your account was temporarily locked for ${LOCK_MINUTES} minutes due to multiple failed login attempts.`,
+      });
       return fail(res, 429, `Too many failed attempts. Account locked for ${LOCK_MINUTES} minutes.`);
     }
     return fail(res, 401, `Invalid email or password. ${remaining} attempt(s) left.`);

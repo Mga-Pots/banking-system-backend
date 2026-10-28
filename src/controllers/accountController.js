@@ -9,6 +9,7 @@ import {
   deriveCardDetails,
   formatAccount,
 } from "../utils/account.js";
+import { createNotification, formatAccountNumber } from "../utils/notification.js";
 
 const MAX_LOGIN_ATTEMPTS = 3;
 const LOCK_MINUTES = 15;
@@ -71,6 +72,11 @@ export const getMyCardDetails = async (req, res) => {
             lockUntil: new Date(Date.now() + LOCK_MINUTES * 60 * 1000),
           }
         );
+        await createNotification({
+          recipient: user._id,
+          type: "security",
+          message: `Virtual card details access was temporarily locked for ${LOCK_MINUTES} minutes due to multiple incorrect password attempts.`,
+        });
         return fail(res, 429, `Too many failed attempts. Account locked for ${LOCK_MINUTES} minutes.`);
       }
       return fail(res, 403, "Incorrect password");
@@ -246,6 +252,12 @@ export const freezeAccount = async (req, res) => {
     account.status = "frozen";
     await account.save();
 
+    await createNotification({
+      recipient: account.owner?._id ?? account.owner,
+      type: "account",
+      message: `Your account (${formatAccountNumber(account.accountNumber)}) has been frozen. Reason: ${reason}. Please contact staff for assistance.`,
+    });
+
     res.status(200).json({
       success: true,
       message: "Account frozen successfully",
@@ -281,6 +293,12 @@ export const unfreezeAccount = async (req, res) => {
 
     account.status = "active";
     await account.save();
+
+    await createNotification({
+      recipient: account.owner?._id ?? account.owner,
+      type: "account",
+      message: `Your account (${formatAccountNumber(account.accountNumber)}) has been reactivated. You can now cash in and transfer funds.`,
+    });
 
     res.status(200).json({
       success: true,
