@@ -95,15 +95,22 @@ export const getMyCardDetails = async (req, res) => {
   }
 };
 
+
 export const getAccountById = async (req, res) => {
   const { id } = req.params;
-  if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "Invalid account ID");
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return fail(res, 400, "Invalid account ID");
+  }
 
   try {
     const account = await BankAccount.findById(id);
-    if (!account) return fail(res, 404, "Account not found");
 
-    // Customers may only view their own account; staff and admin can view any.
+    if (!account) {
+      return fail(res, 404, "Account not found");
+    }
+
+    // Customers can only view their own accounts.
     if (
       req.user.role === "customer" &&
       account.owner?.toString() !== req.user._id.toString()
@@ -111,12 +118,21 @@ export const getAccountById = async (req, res) => {
       return fail(res, 403, "Forbidden");
     }
 
-    res.status(200).json({ success: true, data: formatAccount(account) });
+    // Only customers and staff should reach this endpoint.
+    if (!["customer", "staff"].includes(req.user.role)) {
+      return fail(res, 403, "Forbidden");
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: formatAccount(account),
+    });
   } catch (err) {
     console.error("Get account by id error:", err);
-    fail(res, 500, "Unable to fetch account");
+    return fail(res, 500, "Unable to fetch account");
   }
 };
+
 
 const getInitials = (name = "") =>
   name
@@ -258,10 +274,13 @@ export const freezeAccount = async (req, res) => {
       message: `Your account (${formatAccountNumber(account.accountNumber)}) has been frozen. Reason: ${reason}. Please contact staff for assistance.`,
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Account frozen successfully",
-      data: account,
+      data: {
+        id: account._id,
+        status: account.status,
+      },
     });
   } catch (err) {
     console.error("Freeze account error:", err);
@@ -300,11 +319,15 @@ export const unfreezeAccount = async (req, res) => {
       message: `Your account (${formatAccountNumber(account.accountNumber)}) has been reactivated. You can now cash in and transfer funds.`,
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Account unfrozen successfully",
-      data: account,
+      data: {
+        id: account._id,
+        status: account.status,
+      },
     });
+    
   } catch (err) {
     console.error("Unfreeze account error:", err);
     fail(res, 500, "Unable to unfreeze account");

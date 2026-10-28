@@ -441,9 +441,12 @@ export const getTransactionById = async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "Invalid transaction ID");
 
   try {
-    const isCustomer = req.user.role === "customer";
-
-    const txn = await Transaction.findById(id)
+    if (!["customer", "staff"].includes(req.user.role)) {
+    return fail(res, 403, "Forbidden");
+  }
+  
+  const isCustomer = req.user.role === "customer";
+  const txn = await Transaction.findById(id)
       .populate(accountPopulate("sourceAccount"))
       .populate(accountPopulate("destinationAccount"))
       .lean();
@@ -452,20 +455,35 @@ export const getTransactionById = async (req, res) => {
     if (!isCustomer) {
       return res.status(200).json({ success: true, data: formatTransaction(txn) });
     }
+    
+  // Check all accounts owned by this customer.
+  const accounts = await BankAccount.find({
+    owner: req.user._id,
+  })
+    .select("_id")
+    .lean();
 
-    // Customers don't need a lazily created account just to view a transaction.
-    const account = await BankAccount.findOne({ owner: req.user._id }).select("_id").lean();
-    const accountId = account?._id ?? null;
+  const accountIds = new Set(
+    accounts.map((account) => account._id.toString())
+  );
 
-    const isSender = sameId(txn.sourceAccount, accountId);
-    const isRecipient = sameId(txn.destinationAccount, accountId);
-    const isPerformer = sameId(txn.performedBy, req.user._id);
-    // Incoming money only counts once it has actually arrived (or for cash-ins).
-    const recipientCanView = txn.transactionType === "cash_in" || txn.status === "completed";
+  const sourceAccountId = idOf(txn.sourceAccount)?.toString();
+  const destinationAccountId = idOf(txn.destinationAccount)?.toString();
 
-    if (!(isSender || isPerformer || (isRecipient && recipientCanView))) {
-      return fail(res, 403, "Forbidden");
-    }
+  const isSender =
+    sourceAccountId != null && accountIds.has(sourceAccountId);
+
+  const isRecipient =
+    destinationAccountId != null &&
+    accountIds.has(destinationAccountId);
+
+  // Incoming money only counts once it has actually arrived (or for cash-ins).
+  const recipientCanView =
+    txn.transactionType === "cash_in" || txn.status === "completed";
+
+  if (!(isSender || (isRecipient && recipientCanView))) {
+    return fail(res, 403, "Forbidden");
+  }
 
     return res.status(200).json({ success: true, data: formatTransaction(txn) });
   } catch (err) {
@@ -822,7 +840,7 @@ export const rejectTransfer = async (req, res) => {
   }
 };
 
-const formatAdminTransaction = (txn) => ({
+const formatStaffTransaction = (txn) => ({
   _id: txn._id,
   referenceNumber: txn.referenceNumber,
   transactionType: txn.transactionType,
@@ -836,15 +854,15 @@ const formatAdminTransaction = (txn) => ({
   updatedAt: txn.updatedAt,
 });
 
-export const getAllAdminTransactions = async (req, res) => {
-  try {
+export const getAllStaffTransactions = async (req, res) => {
+    try {
     const transactions = await Transaction.find({})
       .sort({ createdAt: -1, _id: -1 })
       .lean();
 
     return res.status(200).json({
       success: true,
-      data: transactions.map(formatAdminTransaction),
+      data: transactions.map(formatStaffTransaction),
     });
   } catch (err) {
     console.error("Get all admin transactions error:", err);
@@ -852,8 +870,8 @@ export const getAllAdminTransactions = async (req, res) => {
   }
 };
 
-export const updateAdminTransactionStatus = async (req, res) => {
-  const { id } = req.params;
+export const updateStaffTransactionStatus = async (req, res) => {
+    const { id } = req.params;
   const { status, reason } = req.body ?? {};
 
   if (!mongoose.Types.ObjectId.isValid(id)) {

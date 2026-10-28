@@ -163,26 +163,58 @@ export const clearNotifications = async (req, res) => {
  * GET /api/admin/notifications
  * Admin audit log: Retrieves system-wide notification history across all users.
  */
+
 export const getAdminNotificationLogs = async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit, 10) || 50)
+    );
     const skip = (page - 1) * limit;
 
     const notifications = await Notification.find({})
+      .select("_id recipient type message relatedTransaction createdAt isRead")
       .populate("recipient", "name email role")
-      .populate("relatedTransaction", "referenceNumber transactionType amount status")
+      .populate("relatedTransaction", "referenceNumber transactionType status")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
 
+    const data = notifications.map((notification) => ({
+      id: notification._id,
+      recipient: notification.recipient
+        ? {
+            id: notification.recipient._id,
+            name: notification.recipient.name,
+            email: notification.recipient.email,
+            role: notification.recipient.role,
+          }
+        : null,
+      type: notification.type,
+      message:
+        notification.type === "transaction"
+          ? "Transaction notification"
+          : notification.message,
+      relatedTransaction: notification.relatedTransaction
+        ? {
+            referenceNumber: notification.relatedTransaction.referenceNumber,
+            transactionType: notification.relatedTransaction.transactionType,
+            status: notification.relatedTransaction.status,
+          }
+        : null,
+      createdAt: notification.createdAt,
+      isRead: notification.isRead,
+    }));
+
     return res.status(200).json({
       success: true,
-      data: notifications,
+      data,
     });
   } catch (err) {
     console.error("Get admin notification logs error:", err);
     return fail(res, 500, "Unable to fetch notification logs");
   }
 };
+

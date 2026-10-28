@@ -1,8 +1,7 @@
-
 import { Router } from "express";
 import {
-  getAllAdminTransactions,
-  updateAdminTransactionStatus,
+  getAllStaffTransactions,
+  updateStaffTransactionStatus,
   getPendingTransfers,
   approveTransfer,
   rejectTransfer,
@@ -17,13 +16,13 @@ router.use(protect);
 router.get(
   "/transactions",
   authorize("staff"),
-  getAllAdminTransactions
+  getAllStaffTransactions
 );
 
 router.patch(
   "/transactions/:id/status",
   authorize("staff"),
-  updateAdminTransactionStatus
+  updateStaffTransactionStatus
 );
 
 router.get(
