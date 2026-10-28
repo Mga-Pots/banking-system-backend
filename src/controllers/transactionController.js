@@ -325,8 +325,35 @@ export const getTransactions = async (req, res) => {
     if (typeParam !== "all") clauses.push({ transactionType: typeParam });
 
     const periodRaw = String(query.days ?? query.period ?? "").trim().toLowerCase();
-    if (periodRaw === "month") {
+    const fromRaw = typeof query.from === "string" ? query.from.trim() : "";
+    const toRaw = typeof query.to === "string" ? query.to.trim() : "";
+
+    if (periodRaw === "custom" || fromRaw || toRaw) {
+      const createdAtClause = {};
+      let parsedFrom = null;
+      let parsedTo = null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(fromRaw)) {
+        parsedFrom = new Date(`${fromRaw}T00:00:00.000Z`);
+        if (!isNaN(parsedFrom.getTime())) createdAtClause.$gte = parsedFrom;
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(toRaw)) {
+        parsedTo = new Date(`${toRaw}T23:59:59.999Z`);
+        if (!isNaN(parsedTo.getTime())) createdAtClause.$lte = parsedTo;
+      }
+      if (parsedFrom && parsedTo && parsedFrom > parsedTo) {
+        return fail(res, 400, "Start date must be on or before the end date");
+      }
+      if (Object.keys(createdAtClause).length > 0) {
+        clauses.push({ createdAt: createdAtClause });
+      }
+    } else if (periodRaw === "month") {
       clauses.push({ createdAt: { $gte: startOfMonth() } });
+    } else if (periodRaw === "7d") {
+      clauses.push({ createdAt: { $gte: new Date(Date.now() - 7 * 86400000) } });
+    } else if (periodRaw === "30d") {
+      clauses.push({ createdAt: { $gte: new Date(Date.now() - 30 * 86400000) } });
+    } else if (periodRaw === "3m") {
+      clauses.push({ createdAt: { $gte: new Date(Date.now() - 90 * 86400000) } });
     } else if (/^\d+$/.test(periodRaw) && Number(periodRaw) > 0) {
       clauses.push({ createdAt: { $gte: new Date(Date.now() - Number(periodRaw) * 86400000) } });
     } // anything else (including "all") is ignored
@@ -762,6 +789,144 @@ export const rejectTransfer = async (req, res) => {
 
     console.error("Reject transfer error:", err);
     return fail(res, 500, "Unable to reject transfer");
+  } finally {
+    await session.endSession();
+  }
+};
+
+const formatAdminTransaction = (txn) => ({
+  _id: txn._id,
+  referenceNumber: txn.referenceNumber,
+  transactionType: txn.transactionType,
+  amount: txn.amount,
+  sourceAccount: txn.sourceAccount?._id ?? txn.sourceAccount ?? null,
+  destinationAccount: txn.destinationAccount?._id ?? txn.destinationAccount ?? null,
+  performedBy: txn.performedBy?._id ?? txn.performedBy ?? null,
+  status: txn.status,
+  flagReason: txn.flagReason ?? null,
+  createdAt: txn.createdAt,
+  updatedAt: txn.updatedAt,
+});
+
+export const getAllAdminTransactions = async (req, res) => {
+  try {
+    const transactions = await Transaction.find({})
+      .sort({ createdAt: -1, _id: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: transactions.map(formatAdminTransaction),
+    });
+  } catch (err) {
+    console.error("Get all admin transactions error:", err);
+    return fail(res, 500, "Unable to fetch admin transactions");
+  }
+};
+
+export const updateAdminTransactionStatus = async (req, res) => {
+  const { id } = req.params;
+  const { status, reason } = req.body ?? {};
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return fail(res, 400, "Invalid transaction ID");
+  }
+
+  if (!["completed", "cancelled", "failed", "flagged"].includes(status)) {
+    return fail(res, 400, "Status must be one of: completed, cancelled, failed, flagged");
+  }
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const txn = await Transaction.findById(id).session(session);
+      if (!txn) throw httpError(404, "Transaction not found");
+
+      if (status === "flagged") {
+        txn.status = "flagged";
+        txn.flagReason =
+          typeof reason === "string" && reason.trim()
+            ? reason.trim()
+            : "Flagged by staff/admin";
+        await txn.save({ session });
+        return;
+      }
+
+      if (txn.transactionType !== "transfer") {
+        throw httpError(400, "Only transfers can be reviewed");
+      }
+      if (txn.status !== "pending") {
+        throw httpError(400, "Only pending transfers can be updated");
+      }
+
+      if (status === "completed") {
+        if (!txn.sourceAccount || !txn.destinationAccount) {
+          throw httpError(400, "Transfer is missing account information");
+        }
+
+        const destinationAccount = await BankAccount.findById(txn.destinationAccount).session(
+          session
+        );
+        if (!destinationAccount) throw httpError(404, "Recipient account not found");
+        if (destinationAccount.status !== "active") {
+          throw httpError(
+            403,
+            "Recipient account is not active; reject the transfer if it cannot be completed"
+          );
+        }
+
+        const updateFields = { status: "completed" };
+        if (typeof reason === "string" && reason.trim()) {
+          updateFields.flagReason = reason.trim();
+        }
+
+        const approved = await Transaction.findOneAndUpdate(
+          { _id: txn._id, transactionType: "transfer", status: "pending" },
+          { $set: updateFields },
+          { new: true, session }
+        );
+        if (!approved) throw httpError(400, "Transfer has already been reviewed");
+
+        destinationAccount.balance = round2(destinationAccount.balance + txn.amount);
+        await destinationAccount.save({ session });
+      } else {
+        if (!txn.sourceAccount) {
+          throw httpError(400, "Transfer is missing its source account");
+        }
+
+        const sourceAccount = await BankAccount.findById(txn.sourceAccount).session(session);
+        if (!sourceAccount) throw httpError(404, "Sender account not found");
+
+        const updateFields = { status };
+        if (typeof reason === "string" && reason.trim()) {
+          updateFields.flagReason = reason.trim();
+        }
+
+        const rejected = await Transaction.findOneAndUpdate(
+          { _id: txn._id, transactionType: "transfer", status: "pending" },
+          { $set: updateFields },
+          { new: true, session }
+        );
+        if (!rejected) throw httpError(400, "Transfer has already been reviewed");
+
+        sourceAccount.balance = round2(sourceAccount.balance + txn.amount);
+        await sourceAccount.save({ session });
+      }
+    });
+
+    const updated = await Transaction.findById(id)
+      .populate(accountPopulate("sourceAccount"))
+      .populate(accountPopulate("destinationAccount"))
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: formatTransaction(updated),
+    });
+  } catch (err) {
+    if (err.status) return fail(res, err.status, err.message);
+    console.error("Update admin transaction status error:", err);
+    return fail(res, 500, "Unable to update transaction status");
   } finally {
     await session.endSession();
   }

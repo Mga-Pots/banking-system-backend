@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import BankAccount from "../models/BankAccount.js";
+import Transaction from "../models/Transaction.js";
 import User from "../models/User.js";
 import {
   getOrCreateAccount,
@@ -153,6 +154,64 @@ export const lookupAccount = async (req, res) => {
   } catch (err) {
     console.error("Lookup account error:", err);
     fail(res, 500, "Unable to look up account");
+  }
+};
+
+export const getRecentRecipients = async (req, res) => {
+  const limit = Math.min(20, Math.max(1, parseInt(req.query.limit, 10) || 3));
+
+  try {
+    const account = await getOrCreateAccount(req.user._id);
+
+    const recentGroups = await Transaction.aggregate([
+      {
+        $match: {
+          sourceAccount: account._id,
+          transactionType: "transfer",
+          status: { $in: ["completed", "pending"] },
+          destinationAccount: { $ne: null },
+        },
+      },
+      {
+        $group: {
+          _id: "$destinationAccount",
+          lastTransferAt: { $max: "$createdAt" },
+        },
+      },
+      { $sort: { lastTransferAt: -1 } },
+      { $limit: limit * 2 },
+    ]);
+
+    const destIds = recentGroups.map((g) => g._id);
+    if (!destIds.length) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+
+    const destAccounts = await BankAccount.find({
+      _id: { $in: destIds },
+      status: "active",
+    })
+      .populate("owner", "name")
+      .lean();
+
+    const byId = new Map(destAccounts.map((acc) => [acc._id.toString(), acc]));
+    const result = [];
+    for (const group of recentGroups) {
+      const acc = byId.get(group._id.toString());
+      if (!acc) continue;
+      const ownerName = acc.owner?.name ?? "";
+      result.push({
+        accountNumber: acc.accountNumber,
+        displayName: maskName(ownerName),
+        initials: getInitials(ownerName),
+      });
+      if (result.length >= limit) break;
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    console.error("Get recent recipients error:", err);
+    return fail(res, 500, "Unable to fetch recent recipients");
   }
 };
 
