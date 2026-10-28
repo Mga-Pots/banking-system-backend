@@ -9,9 +9,7 @@ import { protect, authorize } from "../middleware/auth.js";
 
 const router = Router();
 
-router.use(
-    protect
-);
+router.use(protect);
 
 router.get(
   "/notifications",
