@@ -2,7 +2,12 @@ import mongoose from "mongoose";
 
 const transactionSchema = new mongoose.Schema(
   {
-    referenceNumber: { type: String, required: true, unique: true, trim: true },
+    referenceNumber: { 
+      type: String, 
+      required: true, 
+      unique: true, 
+      trim: true 
+    },
     transactionType: {
       type: String,
       enum: ["cash_in", "transfer"],
@@ -29,7 +34,10 @@ const transactionSchema = new mongoose.Schema(
       enum: ["pending", "completed", "failed", "cancelled", "flagged"],
       default: "pending",
     },
-    flagReason: { type: String, default: null },
+    flagReason: { 
+      type: String, 
+      default: null 
+    },
   },
   { timestamps: true }
 );
