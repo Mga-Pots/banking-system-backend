@@ -106,3 +106,44 @@ export const updateStaffStatus = async (req, res) => {
     return fail(res, 500, "Unable to update Staff status");
   }
 };
+
+export const getAdminUsers = async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(
+    100,
+    Math.max(1, parseInt(req.query.limit, 10) || 50)
+  );
+  const skip = (page - 1) * limit;
+
+  try {
+    const filter = { isClosed: false };
+
+    const [users, total] = await Promise.all([
+      User.find(filter)
+        .select("_id name email contactNumber role status isVerified createdAt updatedAt")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: users.map((user) => ({
+        ...user,
+        contactNumber: user.contactNumber ?? "",
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err) {
+    console.error("Get admin users error:", err);
+    return fail(res, 500, "Unable to fetch users");
+  }
+};
+
