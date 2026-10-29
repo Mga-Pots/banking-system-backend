@@ -1,7 +1,6 @@
 import { Router } from "express";
 import {
   getAllStaffTransactions,
-  updateStaffTransactionStatus,
   getPendingTransfers,
   approveTransfer,
   rejectTransfer,
@@ -19,17 +18,10 @@ const router = Router();
 
 router.use(protect);
 
-
 router.get(
   "/transactions",
   authorize("staff"),
   getAllStaffTransactions
-);
-
-router.patch(
-  "/transactions/:id/status",
-  authorize("staff"),
-  updateStaffTransactionStatus
 );
 
 router.get(
