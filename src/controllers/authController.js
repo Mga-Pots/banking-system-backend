@@ -27,30 +27,65 @@ const publicUser = (u) => ({
 const fail = (res, code, message) => res.status(code).json({ success: false, message });
 
 export const register = async (req, res) => {
-  const { name, email, password } = req.body;
-  // Contact number is optional: an empty value is stored as "not set"
-  const contactNumber = String(req.body.contactNumber ?? "").trim() || undefined;
+  const { name, email, password } = req.body ?? {};
+  const normalizedEmail =
+    typeof email === "string" ? email.trim().toLowerCase() : "";
 
-  if (!name || !email || !password) {
+  const contactNumber =
+    String(req.body?.contactNumber ?? "").trim() || undefined;
+
+  if (!name?.trim() || !normalizedEmail || !password) {
     return fail(res, 400, "Name, email and password are required");
   }
-  if (password.length < 8) {
+
+  if (typeof password !== "string" || password.length < 8) {
     return fail(res, 400, "Password must be at least 8 characters");
   }
-  const session = await mongoose.startSession();
+
   try {
+    const existingEmail = await User.exists({
+      email: normalizedEmail,
+      isClosed: false,
+    });
+
+    if (existingEmail) {
+      return fail(res, 409, "Email or contact number already used");
+    }
+
+    if (contactNumber) {
+      const existingContact = await User.exists({
+        contactNumber,
+        isClosed: false,
+      });
+
+      if (existingContact) {
+        return fail(res, 409, "Email or contact number already used");
+      }
+    }
+
     const passwordHash = await bcrypt.hash(password, 10);
-    // role is never read from the request body
-    const user = await User.create({ name, email, contactNumber, passwordHash });
-    res.status(201).json({
+
+    const user = await User.create({
+      name: name.trim(),
+      email: normalizedEmail,
+      contactNumber,
+      passwordHash,
+      role: "customer",
+      status: "active",
+      isClosed: false,
+    });
+
+    return res.status(201).json({
       success: true,
       data: { user: publicUser(user), token: sign(user._id) },
     });
   } catch (err) {
-    if (err.code === 11000) return fail(res, 409, "Email or contact number already used");
-    throw err;
-  } finally {
-    await session.endSession();
+    if (err.code === 11000) {
+      return fail(res, 409, "Email or contact number already used");
+    }
+
+    console.error("Registration error:", err);
+    return fail(res, 500, "Unable to register account");
   }
 };
 
@@ -58,7 +93,10 @@ export const login = async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return fail(res, 400, "Email and password are required");
 
-  const user = await User.findOne({ email: email.toLowerCase().trim() });
+  const user = await User.findOne({
+    email: email.toLowerCase().trim(),
+    isClosed: false,
+  });
   if (!user) return fail(res, 401, "Invalid email or password");
 
   // Locked? Refuse even the correct password until the lock expires

@@ -203,9 +203,7 @@ export const updateCustomerStatus = async (req, res) => {
         );
       }
 
-      // Preserve the original email and release it for registration.
-      customer.previousEmail = customer.email;
-      customer.email = `closed+${customer._id}@closed.invalid`;
+      customer.isClosed = true;
       customer.closedAt = new Date();
 
       // Close the bank account.

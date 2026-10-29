@@ -80,6 +80,20 @@ export const updateStaffStatus = async (req, res) => {
       return fail(res, 403, "This endpoint only manages Staff accounts");
     }
 
+    // Prevent a closed staff account from being reactivated.
+    if (staff.status === "closed" && status !== "closed") {
+      return fail(
+        res,
+        400,
+        "Closed Staff accounts cannot be reactivated"
+      );
+    }
+
+    if (status === "closed" && staff.status !== "closed") {
+      staff.isClosed = true;
+      staff.closedAt = new Date();
+    }
+
     staff.status = status;
     await staff.save();
 
