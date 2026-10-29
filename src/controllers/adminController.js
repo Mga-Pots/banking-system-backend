@@ -40,6 +40,7 @@ export const createStaff = async (req, res) => {
       passwordHash,
       role: "staff",
       status: "active",
+      isClosed: false,
     });
 
     return res.status(201).json({
