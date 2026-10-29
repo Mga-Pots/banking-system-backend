@@ -5,12 +5,19 @@ import {
   createStaff,
   updateStaffStatus,
   getAdminUsers,
+  getAdminAuditLogs,
 } from "../controllers/adminController.js";
 import { protect, authorize } from "../middleware/auth.js";
 
 const router = Router();
 
 router.use(protect);
+
+router.get(
+  "/audit-logs",
+  authorize("admin"),
+  getAdminAuditLogs
+);
 
 router.get(
   "/users", 
