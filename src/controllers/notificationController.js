@@ -161,7 +161,8 @@ export const clearNotifications = async (req, res) => {
 
 /**
  * GET /api/admin/notifications
- * Admin audit log: Retrieves system-wide notification history across all users.
+ * Returns sanitized system-wide notification metadata for Admin.
+ * Does not expose notification messages or transaction details.
  */
 
 export const getAdminNotificationLogs = async (req, res) => {
@@ -173,14 +174,16 @@ export const getAdminNotificationLogs = async (req, res) => {
     );
     const skip = (page - 1) * limit;
 
-    const notifications = await Notification.find({})
-      .select("_id recipient type message relatedTransaction createdAt isRead")
-      .populate("recipient", "name email role")
-      .populate("relatedTransaction", "referenceNumber transactionType status")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
+    const [notifications, total] = await Promise.all([
+      Notification.find({})
+        .select("_id recipient type createdAt isRead")
+        .populate("recipient", "name email role")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Notification.countDocuments({}),
+    ]);
 
     const data = notifications.map((notification) => ({
       id: notification._id,
@@ -193,17 +196,6 @@ export const getAdminNotificationLogs = async (req, res) => {
           }
         : null,
       type: notification.type,
-      message:
-        notification.type === "transaction"
-          ? "Transaction notification"
-          : notification.message,
-      relatedTransaction: notification.relatedTransaction
-        ? {
-            referenceNumber: notification.relatedTransaction.referenceNumber,
-            transactionType: notification.relatedTransaction.transactionType,
-            status: notification.relatedTransaction.status,
-          }
-        : null,
       createdAt: notification.createdAt,
       isRead: notification.isRead,
     }));
@@ -211,6 +203,12 @@ export const getAdminNotificationLogs = async (req, res) => {
     return res.status(200).json({
       success: true,
       data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     });
   } catch (err) {
     console.error("Get admin notification logs error:", err);
