@@ -158,7 +158,7 @@ export const updateCustomerStatus = async (req, res) => {
       
     await BankAccount.findOneAndUpdate(
       { owner: customer._id },
-      { status: "close" }
+      { status: "closed" }
       ); 
     } else {
       customer.closedAt = null;
