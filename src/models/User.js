@@ -16,6 +16,13 @@ const userSchema = new mongoose.Schema(
       trim: true 
     },
 
+    previousEmail: {
+      type: String,
+      default: null,
+      lowercase: true,
+      trim: true,
+    },
+
     contactNumber: { 
       type: String, 
       unique: true, 

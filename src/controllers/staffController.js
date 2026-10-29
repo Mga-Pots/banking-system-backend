@@ -1,7 +1,7 @@
-
 import mongoose from "mongoose";
 import User from "../models/User.js";
 import BankAccount from "../models/BankAccount.js";
+import Transaction from "../models/Transaction.js";
 
 const fail = (res, code, message) =>
   res.status(code).json({ success: false, message });
@@ -153,18 +153,69 @@ export const updateCustomerStatus = async (req, res) => {
       );
     }
 
-    if (status === "closed") {
-      customer.closedAt = new Date();
-      
-    await BankAccount.findOneAndUpdate(
-      { owner: customer._id },
-      { status: "closed" }
-      ); 
-    } else {
-      customer.closedAt = null;
+    // Do not allow a closed customer to be reactivated here.
+    // Their original email may already belong to a new customer.
+    if (customer.status === "closed" && status !== "closed") {
+      return fail(
+        res,
+        400,
+        "Closed customer accounts cannot be reactivated"
+      );
     }
-  
+
+    if (status === "closed" && customer.status !== "closed") {
+      // Find the customer's bank account.
+      const bankAccount = await BankAccount.findOne({
+        owner: customer._id,
+      });
+
+      if (!bankAccount) {
+        return fail(
+          res,
+          400,
+          "Cannot close customer account because no bank account exists"
+        );
+      }
+
+      // The account must have a zero balance.
+      if (bankAccount.balance !== 0) {
+        return fail(
+          res,
+          400,
+          "Cannot close customer account while the bank account has a remaining balance"
+        );
+      }
+
+      // Reject closure if a transaction is still pending.
+      const pendingTransaction = await Transaction.exists({
+        status: "pending",
+        $or: [
+          { sourceAccount: bankAccount._id },
+          { destinationAccount: bankAccount._id },
+        ],
+      });
+
+      if (pendingTransaction) {
+        return fail(
+          res,
+          400,
+          "Cannot close customer account while transactions are pending"
+        );
+      }
+
+      // Preserve the original email and release it for registration.
+      customer.previousEmail = customer.email;
+      customer.email = `closed+${customer._id}@closed.invalid`;
+      customer.closedAt = new Date();
+
+      // Close the bank account.
+      bankAccount.status = "closed";
+      await bankAccount.save();
+    }
+
     customer.status = status;
+
+    // Save the customer's new status and closure information.
     await customer.save();
 
     return res.status(200).json({
