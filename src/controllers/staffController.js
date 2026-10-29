@@ -18,7 +18,6 @@ const publicUser = (user) => ({
   updatedAt: user.updatedAt,
 });
 
-
 export const getStaffCustomers = async (req, res) => {
   try {
     const customers = await User.find({ role: "customer" })
@@ -127,7 +126,6 @@ export const getStaffAccounts = async (req, res) => {
 };
 
 
-// Staff manages customer user-account statuses only.
 export const updateCustomerStatus = async (req, res) => {
   const { id } = req.params;
   const { status } = req.body ?? {};
@@ -155,6 +153,17 @@ export const updateCustomerStatus = async (req, res) => {
       );
     }
 
+    if (status === "closed") {
+      customer.closedAt = new Date();
+      
+    await BankAccount.findOneAndUpdate(
+      { owner: customer._id },
+      { status: "close" }
+      ); 
+    } else {
+      customer.closedAt = null;
+    }
+  
     customer.status = status;
     await customer.save();
 
