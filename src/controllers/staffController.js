@@ -3,21 +3,11 @@ import User from "../models/User.js";
 import BankAccount from "../models/BankAccount.js";
 import Transaction from "../models/Transaction.js";
 import { writeAuditLog } from "../utils/auditLog.js";
+import { publicUser } from "../utils/user.js";
 
 const fail = (res, code, message) =>
   res.status(code).json({ success: false, message });
 
-const publicUser = (user) => ({
-  _id: user._id,
-  name: user.name,
-  email: user.email,
-  contactNumber: user.contactNumber ?? "",
-  role: user.role,
-  status: user.status,
-  isVerified: user.isVerified,
-  createdAt: user.createdAt,
-  updatedAt: user.updatedAt,
-});
 
 export const getStaffCustomers = async (req, res) => {
   try {
@@ -28,10 +18,7 @@ export const getStaffCustomers = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: customers.map((customer) => ({
-        ...customer,
-        contactNumber: customer.contactNumber ?? "",
-      })),
+      data: customers.map(publicUser),
     });
   } catch (err) {
     console.error("Get staff customers error:", err);
@@ -67,10 +54,7 @@ export const getStaffCustomerById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: {
-        ...customer,
-        contactNumber: customer.contactNumber ?? "",
-      },
+      data: publicUser(customer),
     });
   } catch (err) {
     console.error("Get staff customer by ID error:", err);

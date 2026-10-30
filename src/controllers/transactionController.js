@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import BankAccount from "../models/BankAccount.js";
 import Transaction from "../models/Transaction.js";
 import { getOrCreateAccount, normalizeAccountNumber } from "../utils/account.js";
-import { createNotification, formatPeso, formatAccountNumber } from "../utils/notification.js";
+import { createNotification, formatPeso, accountEnding } from "../utils/notification.js";
 import { writeAuditLog } from "../utils/auditLog.js";
 
 const MAX_REFERENCE_ATTEMPTS = 5;
@@ -226,7 +226,7 @@ export const transfer = async (req, res) => {
             await createNotification({
               recipient: req.user._id,
               type: "transaction",
-              message: `Your transfer of ${formatPeso(value)} to ${formatAccountNumber(destinationAccount.accountNumber)} is being held for review.`,
+              message: `Your transfer of ${formatPeso(value)} to ${accountEnding(destinationAccount.accountNumber)} is being held for review.`,
               relatedTransaction: txn._id,
               session,
             });
@@ -234,7 +234,7 @@ export const transfer = async (req, res) => {
             await createNotification({
               recipient: req.user._id,
               type: "transaction",
-              message: `Your transfer of ${formatPeso(value)} to ${formatAccountNumber(destinationAccount.accountNumber)} was completed.`,
+              message: `Your transfer of ${formatPeso(value)} to ${accountEnding(destinationAccount.accountNumber)} was completed.`,
               relatedTransaction: txn._id,
               session,
             });
@@ -242,7 +242,7 @@ export const transfer = async (req, res) => {
             await createNotification({
               recipient: destinationAccount.owner,
               type: "transaction",
-              message: `You received ${formatPeso(value)} from ${formatAccountNumber(sourceAccount.accountNumber)}.`,
+              message: `You received ${formatPeso(value)} from ${sourceAccount ? accountEnding(sourceAccount.accountNumber) : "an external account"}.`,
               relatedTransaction: txn._id,
               session,
             });
@@ -681,7 +681,7 @@ export const approveTransfer = async (req, res) => {
       await createNotification({
         recipient: senderUserId,
         type: "transaction",
-        message: `Your transfer of ${formatPeso(txn.amount)} to ${formatAccountNumber(destinationAccount.accountNumber)} was approved by staff and completed.`,
+        message: `Your transfer of ${formatPeso(txn.amount)} to ${accountEnding(destinationAccount.accountNumber)} was approved by staff and completed.`,
         relatedTransaction: txn._id,
         session,
       });
@@ -689,7 +689,7 @@ export const approveTransfer = async (req, res) => {
       await createNotification({
         recipient: destinationAccount.owner,
         type: "transaction",
-        message: `You received ${formatPeso(txn.amount)} from ${formatAccountNumber(sourceAccount?.accountNumber ?? "an external account")}.`,
+        message: `You received ${formatPeso(txn.amount)} from ${sourceAccount ? accountEnding(sourceAccount.accountNumber) : "an external account"}.`,
         relatedTransaction: txn._id,
         session,
       });

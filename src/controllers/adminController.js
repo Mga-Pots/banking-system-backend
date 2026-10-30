@@ -3,21 +3,11 @@ import mongoose from "mongoose";
 import User from "../models/User.js";
 import AuditLog from "../models/AuditLog.js";
 import { writeAuditLog } from "../utils/auditLog.js";
+import { publicUser } from "../utils/user.js";
 
 const fail = (res, code, message) =>
   res.status(code).json({ success: false, message });
 
-const publicUser = (user) => ({
-  _id: user._id,
-  name: user.name,
-  email: user.email,
-  contactNumber: user.contactNumber ?? "",
-  role: user.role,
-  status: user.status,
-  isVerified: user.isVerified,
-  createdAt: user.createdAt,
-  updatedAt: user.updatedAt,
-});
 
 // Admin creates Staff accounts only.
 export const createStaff = async (req, res) => {
@@ -215,10 +205,7 @@ export const getAdminUsers = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: users.map((user) => ({
-        ...user,
-        contactNumber: user.contactNumber ?? "",
-      })),
+      data: users.map(publicUser),
       pagination: {
         page,
         limit,

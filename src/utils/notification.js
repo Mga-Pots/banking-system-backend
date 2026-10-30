@@ -17,6 +17,15 @@ export const formatAccountNumber = (accountNumber) => {
 };
 
 /**
+ * Formats account number for notification messages: "001285165389" -> "account ending 5389".
+ * Safe against null/undefined or external fallbacks.
+ */
+export const accountEnding = (accountNumber) => {
+  const digits = String(accountNumber || "").replace(/\D/g, "");
+  return digits.length >= 4 ? `account ending ${digits.slice(-4)}` : "an external account";
+};
+
+/**
  * Creates a notification record. Optionally accepts a Mongoose session.
  */
 export const createNotification = async ({

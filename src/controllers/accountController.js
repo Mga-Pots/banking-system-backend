@@ -9,7 +9,7 @@ import {
   deriveCardDetails,
   formatAccount,
 } from "../utils/account.js";
-import { createNotification, formatAccountNumber } from "../utils/notification.js";
+import { createNotification, accountEnding } from "../utils/notification.js";
 import { writeAuditLog } from "../utils/auditLog.js";
 
 const MAX_LOGIN_ATTEMPTS = 3;
@@ -282,7 +282,7 @@ export const freezeAccount = async (req, res) => {
     await createNotification({
       recipient: account.owner?._id ?? account.owner,
       type: "account",
-      message: `Your account (${formatAccountNumber(account.accountNumber)}) has been frozen. Reason: ${reason}. Please contact staff for assistance.`,
+      message: `Your ${accountEnding(account.accountNumber)} has been frozen. Reason: ${reason}. Please contact staff for assistance.`,
     });
 
     return res.status(200).json({
@@ -337,7 +337,7 @@ export const unfreezeAccount = async (req, res) => {
     await createNotification({
       recipient: account.owner?._id ?? account.owner,
       type: "account",
-      message: `Your account (${formatAccountNumber(account.accountNumber)}) has been reactivated. You can now cash in and transfer funds.`,
+      message: `Your ${accountEnding(account.accountNumber)} has been reactivated. You can now cash in and transfer funds.`,
     });
 
     return res.status(200).json({
