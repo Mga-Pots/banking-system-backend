@@ -10,6 +10,7 @@ import {
   formatAccount,
 } from "../utils/account.js";
 import { createNotification, formatAccountNumber } from "../utils/notification.js";
+import { writeAuditLog } from "../utils/auditLog.js";
 
 const MAX_LOGIN_ATTEMPTS = 3;
 const LOCK_MINUTES = 15;
@@ -268,6 +269,16 @@ export const freezeAccount = async (req, res) => {
     account.status = "frozen";
     await account.save();
 
+    await writeAuditLog({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      action: "ACCOUNT_FROZEN",
+      targetType: "BankAccount",
+      targetId: account._id,
+      outcome: "success",
+      metadata: {},
+    });
+
     await createNotification({
       recipient: account.owner?._id ?? account.owner,
       type: "account",
@@ -312,6 +323,16 @@ export const unfreezeAccount = async (req, res) => {
 
     account.status = "active";
     await account.save();
+
+    await writeAuditLog({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      action: "ACCOUNT_UNFROZEN",
+      targetType: "BankAccount",
+      targetId: account._id,
+      outcome: "success",
+      metadata: {},
+    });
 
     await createNotification({
       recipient: account.owner?._id ?? account.owner,

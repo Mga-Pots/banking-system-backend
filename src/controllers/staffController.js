@@ -125,7 +125,6 @@ export const getStaffAccounts = async (req, res) => {
   }
 };
 
-
 export const updateCustomerStatus = async (req, res) => {
   const { id } = req.params;
   const { status } = req.body ?? {};
