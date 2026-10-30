@@ -4,25 +4,13 @@ import mongoose from "mongoose";
 import User from "../models/User.js";
 import { createAccountFor } from "../utils/account.js";
 import { createNotification } from "../utils/notification.js";
+import { publicUser } from "../utils/user.js";
 
 const MAX_LOGIN_ATTEMPTS = 3;
 const LOCK_MINUTES = 15;
 
 const sign = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN });
-
-const publicUser = (u) => ({
-  _id: u._id,
-  name: u.name,
-  email: u.email,
-  contactNumber: u.contactNumber ?? "",
-  role: u.role,
-  status: u.status,
-  isVerified: u.isVerified,
-  notificationPreferences: u.notificationPreferences,
-  createdAt: u.createdAt,
-  updatedAt: u.updatedAt,
-});
 
 const fail = (res, code, message) => res.status(code).json({ success: false, message });
 
