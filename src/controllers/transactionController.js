@@ -275,10 +275,6 @@ export const transfer = async (req, res) => {
   }
 };
 
-// ---------------------------------------------------------------------------
-// Commit #4: history, details, cancellation
-// ---------------------------------------------------------------------------
-
 const STATUSES = ["completed", "pending", "failed", "cancelled", "flagged"];
 const TYPES = ["cash_in", "transfer"];
 const DEFAULT_LIMIT = 8;
@@ -703,7 +699,7 @@ export const approveTransfer = async (req, res) => {
       await writeAuditLog({
         actor: req.user._id,
         actorRole: req.user.role,
-        action: "TRANSFER_APPROVED",
+        action: "Transfer Approved",
         targetType: "Transaction",
         targetId: txn._id,
         outcome: "success",
@@ -822,7 +818,7 @@ export const rejectTransfer = async (req, res) => {
       await writeAuditLog({
         actor: req.user._id,
         actorRole: req.user.role,
-        action: "TRANSFER_REJECTED",
+        action: "Transfer Rejected",
         targetType: "Transaction",
         targetId: txn._id,
         outcome: "success",

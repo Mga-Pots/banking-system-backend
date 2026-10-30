@@ -272,7 +272,7 @@ export const freezeAccount = async (req, res) => {
     await writeAuditLog({
       actor: req.user._id,
       actorRole: req.user.role,
-      action: "ACCOUNT_FROZEN",
+      action: "Acount Frozen",
       targetType: "BankAccount",
       targetId: account._id,
       outcome: "success",
@@ -327,7 +327,7 @@ export const unfreezeAccount = async (req, res) => {
     await writeAuditLog({
       actor: req.user._id,
       actorRole: req.user.role,
-      action: "ACCOUNT_UNFROZEN",
+      action: "Account Unfrozen",
       targetType: "BankAccount",
       targetId: account._id,
       outcome: "success",
