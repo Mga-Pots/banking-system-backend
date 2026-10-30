@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import User from "../models/User.js";
 import BankAccount from "../models/BankAccount.js";
 import Transaction from "../models/Transaction.js";
+import { writeAuditLog } from "../utils/auditLog.js";
 
 const fail = (res, code, message) =>
   res.status(code).json({ success: false, message });
@@ -97,6 +98,16 @@ export const verifyCustomer = async (req, res) => {
 
     customer.isVerified = true;
     await customer.save();
+
+    await writeAuditLog({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      action: "Customer Verified",
+      targetType: "User",
+      targetId: customer._id,
+      outcome: "success",
+      metadata: {},
+    });
 
     return res.status(200).json({
       success: true,
@@ -214,6 +225,18 @@ export const updateCustomerStatus = async (req, res) => {
 
     // Save the customer's new status and closure information.
     await customer.save();
+
+    await writeAuditLog({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      action: "Customer Status Updated",
+      targetType: "User",
+      targetId: customer._id,
+      outcome: "success",
+      metadata: {
+        newStatus: customer.status,
+      },
+    });
 
     return res.status(200).json({
       success: true,
