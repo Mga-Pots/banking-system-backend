@@ -4,6 +4,7 @@ import BankAccount from "../models/BankAccount.js";
 import Transaction from "../models/Transaction.js";
 import { getOrCreateAccount, normalizeAccountNumber } from "../utils/account.js";
 import { createNotification, formatPeso, formatAccountNumber } from "../utils/notification.js";
+import { writeAuditLog } from "../utils/auditLog.js";
 
 const MAX_REFERENCE_ATTEMPTS = 5;
 // Transfers at or above this amount (in centavos) are held for staff review instead of completing immediately.
@@ -698,6 +699,17 @@ export const approveTransfer = async (req, res) => {
       });
 
       destinationBalance = destinationAccount.balance;
+
+      await writeAuditLog({
+        actor: req.user._id,
+        actorRole: req.user.role,
+        action: "TRANSFER_APPROVED",
+        targetType: "Transaction",
+        targetId: txn._id,
+        outcome: "success",
+        metadata: {},
+        session,
+      });
     });
 
     const updated = await Transaction.findById(id)
@@ -806,6 +818,17 @@ export const rejectTransfer = async (req, res) => {
       });
 
       sourceBalance = sourceAccount.balance;
+
+      await writeAuditLog({
+        actor: req.user._id,
+        actorRole: req.user.role,
+        action: "TRANSFER_REJECTED",
+        targetType: "Transaction",
+        targetId: txn._id,
+        outcome: "success",
+        metadata: {},
+        session,
+      });
     });
 
     const updated = await Transaction.findById(id)
