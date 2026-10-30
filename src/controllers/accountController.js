@@ -155,7 +155,7 @@ export const lookupAccount = async (req, res) => {
   if (!accountNumber) return fail(res, 400, "Account number must be a 12-digit number");
 
   try {
-    const account = await BankAccount.findOne({ accountNumber }).populate("owner", "name");
+    const account = await BankAccount.findOne({ accountNumber }).populate("owner", "name status");
     if (!account) return fail(res, 404, "Account not found");
 
     if (account.owner?._id?.toString() === req.user._id.toString()) {
@@ -163,6 +163,9 @@ export const lookupAccount = async (req, res) => {
     }
     if (account.status !== "active") {
       return fail(res, 403, "Recipient account cannot receive money");
+    }
+    if (!account.owner || account.owner.status !== "active") {
+      return fail(res, 403, "Recipient user account is not active and cannot receive money");
     }
 
     const ownerName = account.owner?.name ?? "";
@@ -214,10 +217,12 @@ export const getRecentRecipients = async (req, res) => {
       _id: { $in: destIds },
       status: "active",
     })
-      .populate("owner", "name")
+      .populate("owner", "name status")
       .lean();
 
-    const byId = new Map(destAccounts.map((acc) => [acc._id.toString(), acc]));
+    const activeDestAccounts = destAccounts.filter((a) => a.owner?.status === "active");
+
+    const byId = new Map(activeDestAccounts.map((acc) => [acc._id.toString(), acc]));
     const result = [];
     for (const group of recentGroups) {
       const acc = byId.get(group._id.toString());

@@ -4,6 +4,8 @@ import {
   getPendingTransfers,
   approveTransfer,
   rejectTransfer,
+  flagTransfer,
+  updateStaffTransactionStatus,
 } from "../controllers/transactionController.js";
 import { protect, authorize } from "../middleware/auth.js";
 import {
@@ -40,6 +42,18 @@ router.patch(
   "/transactions/:id/reject",
   authorize("staff"),
   rejectTransfer
+);
+
+router.patch(
+  "/transactions/:id/flag",
+  authorize("staff"),
+  flagTransfer
+);
+
+router.patch(
+  "/transactions/:id/status",
+  authorize("staff"),
+  updateStaffTransactionStatus
 );
 
 router.patch(

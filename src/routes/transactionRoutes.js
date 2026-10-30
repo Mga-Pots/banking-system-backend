@@ -5,6 +5,7 @@ import {
   getTransactions,
   getTransactionById,
   cancelTransaction,
+  submitTransferVerification,
 } from "../controllers/transactionController.js";
 import { protect, authorize } from "../middleware/auth.js";
 import { idempotency } from "../middleware/idempotency.js";
@@ -43,6 +44,13 @@ router.patch(
   protect, 
   authorize("customer"), 
   cancelTransaction
+);
+
+router.post(
+  "/:id/verification",
+  protect,
+  authorize("customer"),
+  submitTransferVerification
 );
 
 export default router;
