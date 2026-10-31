@@ -33,7 +33,7 @@ try {
     console.log("Staff account already exists; no changes made.");
   } else {
     const userData = {
-      name: "Development Staff",
+      name: "Sheldon Plankton",
       email,
       passwordHash: await bcrypt.hash(STAFF_PASSWORD, 10),
       role: "staff",
