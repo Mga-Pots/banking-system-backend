@@ -2,8 +2,10 @@ import { randomInt } from "node:crypto";
 import mongoose from "mongoose";
 import BankAccount from "../models/BankAccount.js";
 import Transaction from "../models/Transaction.js";
+import User from "../models/User.js";
 import { getOrCreateAccount, normalizeAccountNumber } from "../utils/account.js";
-import { createNotification, formatPeso, formatAccountNumber } from "../utils/notification.js";
+import { createNotification, formatPeso, accountEnding } from "../utils/notification.js";
+import { writeAuditLog } from "../utils/auditLog.js";
 
 const MAX_REFERENCE_ATTEMPTS = 5;
 // Transfers at or above this amount (in centavos) are held for staff review instead of completing immediately.
@@ -65,6 +67,8 @@ const formatTransaction = (txn) => ({
   performedBy: txn.performedBy?._id ?? txn.performedBy,
   status: txn.status,
   flagReason: txn.flagReason ?? null,
+  note: txn.note ?? null,
+  verification: txn.verification?.status ? txn.verification : undefined,
   createdAt: txn.createdAt,
   updatedAt: txn.updatedAt,
 });
@@ -163,6 +167,12 @@ export const transfer = async (req, res) => {
     return fail(res, 400, "Recipient account number must be a 12-digit number");
   }
 
+  const rawNote = typeof req.body?.note === "string" ? req.body.note.trim() : null;
+  if (rawNote && rawNote.length > 200) {
+    return fail(res, 400, "Note cannot exceed 200 characters");
+  }
+  const note = rawNote && rawNote.length > 0 ? rawNote : null;
+
   const holdForReview = value >= HOLD_THRESHOLD || body.holdForReview === true;
 
   const session = await mongoose.startSession();
@@ -184,7 +194,10 @@ export const transfer = async (req, res) => {
 
           const destinationAccount = await BankAccount.findOne({
             accountNumber: recipientNumber,
-          }).session(session);
+          })
+            .populate("owner", "status")
+            .session(session);
+
           if (!destinationAccount) throw httpError(404, "Recipient account not found");
 
           if (sourceAccount._id.equals(destinationAccount._id)) {
@@ -192,6 +205,9 @@ export const transfer = async (req, res) => {
           }
           if (destinationAccount.status !== "active") {
             throw httpError(403, "Recipient account is frozen or closed and cannot receive money");
+          }
+          if (!destinationAccount.owner || destinationAccount.owner.status !== "active") {
+            throw httpError(403, "Recipient user account is not active and cannot receive money");
           }
           if (sourceAccount.balance < value) throw httpError(400, "Insufficient balance");
 
@@ -216,6 +232,7 @@ export const transfer = async (req, res) => {
                 performedBy: req.user._id,
                 status: holdForReview ? "pending" : "completed",
                 flagReason: holdForReview ? HOLD_REASON : null,
+                note,
               },
             ],
             { session }
@@ -225,7 +242,7 @@ export const transfer = async (req, res) => {
             await createNotification({
               recipient: req.user._id,
               type: "transaction",
-              message: `Your transfer of ${formatPeso(value)} to ${formatAccountNumber(destinationAccount.accountNumber)} is being held for review.`,
+              message: `Your transfer of ${formatPeso(value)} to ${accountEnding(destinationAccount.accountNumber)} is being held for review.`,
               relatedTransaction: txn._id,
               session,
             });
@@ -233,15 +250,15 @@ export const transfer = async (req, res) => {
             await createNotification({
               recipient: req.user._id,
               type: "transaction",
-              message: `Your transfer of ${formatPeso(value)} to ${formatAccountNumber(destinationAccount.accountNumber)} was completed.`,
+              message: `Your transfer of ${formatPeso(value)} to ${accountEnding(destinationAccount.accountNumber)} was completed.`,
               relatedTransaction: txn._id,
               session,
             });
 
             await createNotification({
-              recipient: destinationAccount.owner,
+              recipient: destinationAccount.owner?._id ?? destinationAccount.owner,
               type: "transaction",
-              message: `You received ${formatPeso(value)} from ${formatAccountNumber(sourceAccount.accountNumber)}.`,
+              message: `You received ${formatPeso(value)} from ${sourceAccount ? accountEnding(sourceAccount.accountNumber) : "an external account"}.`,
               relatedTransaction: txn._id,
               session,
             });
@@ -274,16 +291,20 @@ export const transfer = async (req, res) => {
   }
 };
 
-// ---------------------------------------------------------------------------
-// Commit #4: history, details, cancellation
-// ---------------------------------------------------------------------------
-
 const STATUSES = ["completed", "pending", "failed", "cancelled", "flagged"];
 const TYPES = ["cash_in", "transfer"];
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;
 
 const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// "500", "1,250.50" or "₱500" → centavos (integer math), or null if it isn't an amount.
+const pesosToCentavos = (text) => {
+  const clean = String(text ?? "").replace(/[,\s₱]/g, "");
+  if (!/^\d{1,9}(\.\d{1,2})?$/.test(clean)) return null;
+  const [whole, fraction = ""] = clean.split(".");
+  return Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
+};
 
 const idOf = (value) => value?._id ?? value ?? null;
 const sameId = (a, b) => a != null && b != null && String(idOf(a)) === String(idOf(b));
@@ -325,15 +346,45 @@ export const getTransactions = async (req, res) => {
     if (typeParam !== "all") clauses.push({ transactionType: typeParam });
 
     const periodRaw = String(query.days ?? query.period ?? "").trim().toLowerCase();
-    if (periodRaw === "month") {
+    const fromRaw = typeof query.from === "string" ? query.from.trim() : "";
+    const toRaw = typeof query.to === "string" ? query.to.trim() : "";
+
+    if (periodRaw === "custom" || fromRaw || toRaw) {
+      const createdAtClause = {};
+      let parsedFrom = null;
+      let parsedTo = null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(fromRaw)) {
+        parsedFrom = new Date(`${fromRaw}T00:00:00.000Z`);
+        if (!isNaN(parsedFrom.getTime())) createdAtClause.$gte = parsedFrom;
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(toRaw)) {
+        parsedTo = new Date(`${toRaw}T23:59:59.999Z`);
+        if (!isNaN(parsedTo.getTime())) createdAtClause.$lte = parsedTo;
+      }
+      if (parsedFrom && parsedTo && parsedFrom > parsedTo) {
+        return fail(res, 400, "Start date must be on or before the end date");
+      }
+      if (Object.keys(createdAtClause).length > 0) {
+        clauses.push({ createdAt: createdAtClause });
+      }
+    } else if (periodRaw === "month") {
       clauses.push({ createdAt: { $gte: startOfMonth() } });
+    } else if (periodRaw === "7d") {
+      clauses.push({ createdAt: { $gte: new Date(Date.now() - 7 * 86400000) } });
+    } else if (periodRaw === "30d") {
+      clauses.push({ createdAt: { $gte: new Date(Date.now() - 30 * 86400000) } });
+    } else if (periodRaw === "3m") {
+      clauses.push({ createdAt: { $gte: new Date(Date.now() - 90 * 86400000) } });
     } else if (/^\d+$/.test(periodRaw) && Number(periodRaw) > 0) {
       clauses.push({ createdAt: { $gte: new Date(Date.now() - Number(periodRaw) * 86400000) } });
     } // anything else (including "all") is ignored
 
-    const search = String(query.search ?? query.q ?? "").trim().replace(/\s+/g, "");
+    const rawSearch = String(query.search ?? query.q ?? "").trim().replace(/\s+/g, " ");
+    const search = rawSearch.replace(/\s/g, "");
     if (search) {
       const or = [{ referenceNumber: { $regex: escapeRegex(search), $options: "i" } }];
+
+      // Other accounts by (part of) their account number.
       if (/^\d+$/.test(search)) {
         const matched = await BankAccount.find({
           accountNumber: { $regex: escapeRegex(search) },
@@ -346,6 +397,34 @@ export const getTransactions = async (req, res) => {
           or.push({ sourceAccount: { $in: ids } }, { destinationAccount: { $in: ids } });
         }
       }
+
+      // The amount, typed in pesos.
+      const centavos = pesosToCentavos(search);
+      if (centavos !== null && centavos > 0) or.push({ amount: centavos });
+
+      // A recipient's first name: one word, matched at the start of the name only.
+      // Customers only see "Juan C.", so surnames and incoming senders stay hidden.
+      // The visibility clause above still limits results to this customer's own transactions.
+      if (/^\p{L}{2,}$/u.test(rawSearch)) {
+        const owners = await User.find({
+          name: { $regex: "^" + escapeRegex(rawSearch), $options: "i" },
+        })
+          .select("_id")
+          .lean();
+        if (owners.length) {
+          const named = await BankAccount.find({
+            owner: { $in: owners.map((o) => o._id) },
+            _id: { $ne: account._id },
+          })
+            .select("_id")
+            .lean();
+          if (named.length) {
+            // Outgoing only: transfers this customer sent to those accounts.
+            or.push({ destinationAccount: { $in: named.map((a) => a._id) } });
+          }
+        }
+      }
+
       clauses.push({ $or: or });
     }
 
@@ -414,9 +493,12 @@ export const getTransactionById = async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "Invalid transaction ID");
 
   try {
-    const isCustomer = req.user.role === "customer";
-
-    const txn = await Transaction.findById(id)
+    if (!["customer", "staff"].includes(req.user.role)) {
+    return fail(res, 403, "Forbidden");
+  }
+  
+  const isCustomer = req.user.role === "customer";
+  const txn = await Transaction.findById(id)
       .populate(accountPopulate("sourceAccount"))
       .populate(accountPopulate("destinationAccount"))
       .lean();
@@ -425,20 +507,35 @@ export const getTransactionById = async (req, res) => {
     if (!isCustomer) {
       return res.status(200).json({ success: true, data: formatTransaction(txn) });
     }
+    
+  // Check all accounts owned by this customer.
+  const accounts = await BankAccount.find({
+    owner: req.user._id,
+  })
+    .select("_id")
+    .lean();
 
-    // Customers don't need a lazily created account just to view a transaction.
-    const account = await BankAccount.findOne({ owner: req.user._id }).select("_id").lean();
-    const accountId = account?._id ?? null;
+  const accountIds = new Set(
+    accounts.map((account) => account._id.toString())
+  );
 
-    const isSender = sameId(txn.sourceAccount, accountId);
-    const isRecipient = sameId(txn.destinationAccount, accountId);
-    const isPerformer = sameId(txn.performedBy, req.user._id);
-    // Incoming money only counts once it has actually arrived (or for cash-ins).
-    const recipientCanView = txn.transactionType === "cash_in" || txn.status === "completed";
+  const sourceAccountId = idOf(txn.sourceAccount)?.toString();
+  const destinationAccountId = idOf(txn.destinationAccount)?.toString();
 
-    if (!(isSender || isPerformer || (isRecipient && recipientCanView))) {
-      return fail(res, 403, "Forbidden");
-    }
+  const isSender =
+    sourceAccountId != null && accountIds.has(sourceAccountId);
+
+  const isRecipient =
+    destinationAccountId != null &&
+    accountIds.has(destinationAccountId);
+
+  // Incoming money only counts once it has actually arrived (or for cash-ins).
+  const recipientCanView =
+    txn.transactionType === "cash_in" || txn.status === "completed";
+
+  if (!(isSender || (isRecipient && recipientCanView))) {
+    return fail(res, 403, "Forbidden");
+  }
 
     return res.status(200).json({ success: true, data: formatTransaction(txn) });
   } catch (err) {
@@ -581,8 +678,12 @@ export const approveTransfer = async (req, res) => {
         throw httpError(400, "Only transfers can be approved");
       }
 
-      if (txn.status !== "pending") {
-        throw httpError(400, "Only pending transfers can be approved");
+      if (!["pending", "flagged"].includes(txn.status)) {
+        throw httpError(400, "Only pending or flagged transfers can be reviewed");
+      }
+
+      if (txn.status === "flagged" && txn.verification?.status !== "submitted") {
+        throw httpError(400, "This transfer is waiting for the sender's document, so it can only be rejected");
       }
 
       if (!txn.sourceAccount || !txn.destinationAccount) {
@@ -610,7 +711,7 @@ export const approveTransfer = async (req, res) => {
         {
           _id: txn._id,
           transactionType: "transfer",
-          status: "pending",
+          status: { $in: ["pending", "flagged"] },
         },
         {
           $set: { status: "completed" },
@@ -633,7 +734,37 @@ export const approveTransfer = async (req, res) => {
 
       await destinationAccount.save({ session });
 
+      const sourceAccount = await BankAccount.findById(txn.sourceAccount).session(session);
+      const senderUserId = sourceAccount?.owner ?? txn.performedBy;
+
+      await createNotification({
+        recipient: senderUserId,
+        type: "transaction",
+        message: `Your transfer of ${formatPeso(txn.amount)} to ${accountEnding(destinationAccount.accountNumber)} was approved by staff and completed.`,
+        relatedTransaction: txn._id,
+        session,
+      });
+
+      await createNotification({
+        recipient: destinationAccount.owner,
+        type: "transaction",
+        message: `You received ${formatPeso(txn.amount)} from ${sourceAccount ? accountEnding(sourceAccount.accountNumber) : "an external account"}.`,
+        relatedTransaction: txn._id,
+        session,
+      });
+
       destinationBalance = destinationAccount.balance;
+
+      await writeAuditLog({
+        actor: req.user._id,
+        actorRole: req.user.role,
+        action: "TRANSACTION_APPROVED",
+        targetType: "Transaction",
+        targetId: txn._id,
+        outcome: "success",
+        metadata: {},
+        session,
+      });
     });
 
     const updated = await Transaction.findById(id)
@@ -691,8 +822,8 @@ export const rejectTransfer = async (req, res) => {
         throw httpError(400, "Only transfers can be rejected");
       }
 
-      if (txn.status !== "pending") {
-        throw httpError(400, "Only pending transfers can be rejected");
+      if (!["pending", "flagged"].includes(txn.status)) {
+        throw httpError(400, "Only pending or flagged transfers can be reviewed");
       }
 
       if (!txn.sourceAccount) {
@@ -707,15 +838,21 @@ export const rejectTransfer = async (req, res) => {
         throw httpError(404, "Sender account not found");
       }
 
-      // Claim the pending transaction before issuing the refund.
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+      const flagReason = reason || "Rejected by staff";
+
+      // Claim the pending or flagged transaction before issuing the refund.
       const rejected = await Transaction.findOneAndUpdate(
         {
           _id: txn._id,
           transactionType: "transfer",
-          status: "pending",
+          status: { $in: ["pending", "flagged"] },
         },
         {
-          $set: { status: "failed" },
+          $set: {
+            status: "cancelled",
+            flagReason,
+          },
         },
         {
           new: true,
@@ -732,7 +869,27 @@ export const rejectTransfer = async (req, res) => {
 
       await sourceAccount.save({ session });
 
+      const senderUserId = sourceAccount?.owner ?? txn.performedBy;
+      await createNotification({
+        recipient: senderUserId,
+        type: "transaction",
+        message: `Your transfer of ${formatPeso(txn.amount)} was rejected by staff and refunded to your account.`,
+        relatedTransaction: txn._id,
+        session,
+      });
+
       sourceBalance = sourceAccount.balance;
+
+      await writeAuditLog({
+        actor: req.user._id,
+        actorRole: req.user.role,
+        action: "TRANSACTION_REJECTED",
+        targetType: "Transaction",
+        targetId: txn._id,
+        outcome: "success",
+        metadata: { reason: flagReason },
+        session,
+      });
     });
 
     const updated = await Transaction.findById(id)
@@ -767,3 +924,212 @@ export const rejectTransfer = async (req, res) => {
   }
 };
 
+const formatStaffTransaction = (txn) => ({
+  _id: txn._id,
+  referenceNumber: txn.referenceNumber,
+  transactionType: txn.transactionType,
+  amount: txn.amount,
+  sourceAccount: txn.sourceAccount?._id ?? txn.sourceAccount ?? null,
+  destinationAccount: txn.destinationAccount?._id ?? txn.destinationAccount ?? null,
+  performedBy: txn.performedBy?._id ?? txn.performedBy ?? null,
+  status: txn.status,
+  flagReason: txn.flagReason ?? null,
+  note: txn.note ?? null,
+  verification: txn.verification?.status ? txn.verification : undefined,
+  createdAt: txn.createdAt,
+  updatedAt: txn.updatedAt,
+});
+
+export const getAllStaffTransactions = async (req, res) => {
+    try {
+    const transactions = await Transaction.find({})
+      .sort({ createdAt: -1, _id: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: transactions.map(formatStaffTransaction),
+    });
+  } catch (err) {
+    console.error("Get all staff transactions error:", err);
+    return fail(res, 500, "Unable to fetch staff transactions");
+  }
+};
+export const submitTransferVerification = async (req, res) => {
+  const { id } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return fail(res, 400, "Invalid transaction ID");
+  }
+
+  const rawDocName = typeof req.body?.documentName === "string" ? req.body.documentName.trim() : "";
+  if (!rawDocName) {
+    return fail(res, 400, "Attach a document to send");
+  }
+
+  const documentName = rawDocName.replace(/[/\\?%*:|"<>]/g, "").trim().slice(0, 120);
+  if (!documentName) {
+    return fail(res, 400, "Attach a document to send");
+  }
+
+  try {
+    const txn = await Transaction.findById(id);
+    if (!txn) {
+      return fail(res, 404, "Transaction not found");
+    }
+
+    const account = await getOrCreateAccount(req.user._id);
+    if (!account || !txn.sourceAccount || String(txn.sourceAccount?._id ?? txn.sourceAccount) !== String(account._id)) {
+      return fail(res, 400, "Only the sender can send an ID for this transfer");
+    }
+
+    if (txn.status !== "flagged") {
+      return fail(res, 400, "This transfer is not waiting for an ID check");
+    }
+
+    if (txn.verification?.status !== "requested") {
+      return fail(res, 400, "An ID has already been sent for this transfer");
+    }
+
+    const updated = await Transaction.findOneAndUpdate(
+      {
+        _id: id,
+        sourceAccount: account._id,
+        status: "flagged",
+        "verification.status": "requested",
+      },
+      {
+        $set: {
+          "verification.status": "submitted",
+          "verification.submittedAt": new Date(),
+          "verification.documentName": documentName,
+        },
+      },
+      { new: true }
+    );
+
+    if (!updated) {
+      return fail(res, 400, "An ID has already been sent for this transfer");
+    }
+
+    const populated = await Transaction.findById(updated._id)
+      .populate(accountPopulate("sourceAccount"))
+      .populate(accountPopulate("destinationAccount"))
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: formatTransaction(populated ?? updated),
+    });
+  } catch (err) {
+    console.error("Submit transfer verification error:", err);
+    return fail(res, 500, "Unable to submit transfer verification");
+  }
+};
+
+export const flagTransfer = async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return fail(res, 400, "Invalid transaction ID");
+  }
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!reason) {
+    return fail(res, 400, "A reason is required to flag a transfer");
+  }
+
+  const session = await mongoose.startSession();
+  try {
+    let updatedTxn;
+
+    await session.withTransaction(async () => {
+      const txn = await Transaction.findById(id).session(session);
+      if (!txn) {
+        throw httpError(404, "Transaction not found");
+      }
+
+      if (txn.transactionType !== "transfer") {
+        throw httpError(400, "Only transfers can be flagged");
+      }
+
+      if (txn.status !== "pending") {
+        throw httpError(400, "Only pending transfers can be flagged");
+      }
+
+      const flaggedTxn = await Transaction.findOneAndUpdate(
+        { _id: txn._id, transactionType: "transfer", status: "pending" },
+        {
+          $set: {
+            status: "flagged",
+            flagReason: reason,
+            verification: {
+              status: "requested",
+              requestedAt: new Date(),
+              submittedAt: null,
+              documentName: null,
+            },
+          },
+        },
+        { new: true, session }
+      );
+
+      if (!flaggedTxn) {
+        throw httpError(400, "Transfer has already been reviewed");
+      }
+
+      const sourceAccount = txn.sourceAccount
+        ? await BankAccount.findById(txn.sourceAccount).session(session)
+        : null;
+      const senderUserId = sourceAccount?.owner ?? txn.performedBy;
+
+      await writeAuditLog({
+        actor: req.user._id,
+        actorRole: req.user.role,
+        action: "TRANSACTION_FLAGGED",
+        targetType: "Transaction",
+        targetId: txn._id,
+        outcome: "success",
+        metadata: { reason },
+        session,
+      });
+
+      await createNotification({
+        recipient: senderUserId,
+        type: "transaction",
+        message: `Your transfer of ${formatPeso(txn.amount)} needs an ID check before it can go through. Open it to send a valid ID.`,
+        relatedTransaction: txn._id,
+        session,
+      });
+
+      updatedTxn = flaggedTxn;
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Transfer flagged for verification",
+      data: formatStaffTransaction(updatedTxn),
+    });
+  } catch (err) {
+    if (err.status) {
+      return fail(res, err.status, err.message);
+    }
+    console.error("Flag transfer error:", err);
+    return fail(res, 500, "Unable to flag transfer");
+  } finally {
+    await session.endSession();
+  }
+};
+
+export const updateStaffTransactionStatus = async (req, res) => {
+  const status = req.body?.status;
+  if (status === "completed") {
+    return approveTransfer(req, res);
+  }
+  if (status === "cancelled") {
+    return rejectTransfer(req, res);
+  }
+  if (status === "flagged") {
+    return flagTransfer(req, res);
+  }
+  return fail(res, 400, "Status must be one of: completed, cancelled, flagged");
+};

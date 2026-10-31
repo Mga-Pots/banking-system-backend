@@ -2,7 +2,12 @@ import mongoose from "mongoose";
 
 const transactionSchema = new mongoose.Schema(
   {
-    referenceNumber: { type: String, required: true, unique: true, trim: true },
+    referenceNumber: { 
+      type: String, 
+      required: true, 
+      unique: true, 
+      trim: true 
+    },
     transactionType: {
       type: String,
       enum: ["cash_in", "transfer"],
@@ -29,7 +34,26 @@ const transactionSchema = new mongoose.Schema(
       enum: ["pending", "completed", "failed", "cancelled", "flagged"],
       default: "pending",
     },
-    flagReason: { type: String, default: null },
+    flagReason: { 
+      type: String, 
+      default: null 
+    },
+    note: {
+      type: String,
+      trim: true,
+      maxlength: [200, "Note cannot exceed 200 characters"],
+      default: null,
+    },
+    verification: {
+      status: {
+        type: String,
+        enum: ["requested", "submitted"],
+        default: undefined,
+      },
+      requestedAt: { type: Date, default: null },
+      submittedAt: { type: Date, default: null },
+      documentName: { type: String, trim: true, maxlength: 120, default: null },
+    },
   },
   { timestamps: true }
 );

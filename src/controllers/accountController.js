@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import BankAccount from "../models/BankAccount.js";
+import Transaction from "../models/Transaction.js";
 import User from "../models/User.js";
 import {
   getOrCreateAccount,
@@ -8,6 +9,8 @@ import {
   deriveCardDetails,
   formatAccount,
 } from "../utils/account.js";
+import { createNotification, accountEnding } from "../utils/notification.js";
+import { writeAuditLog } from "../utils/auditLog.js";
 
 const MAX_LOGIN_ATTEMPTS = 3;
 const LOCK_MINUTES = 15;
@@ -70,6 +73,11 @@ export const getMyCardDetails = async (req, res) => {
             lockUntil: new Date(Date.now() + LOCK_MINUTES * 60 * 1000),
           }
         );
+        await createNotification({
+          recipient: user._id,
+          type: "security",
+          message: `Virtual card details access was temporarily locked for ${LOCK_MINUTES} minutes due to multiple incorrect password attempts.`,
+        });
         return fail(res, 429, `Too many failed attempts. Account locked for ${LOCK_MINUTES} minutes.`);
       }
       return fail(res, 403, "Incorrect password");
@@ -88,15 +96,22 @@ export const getMyCardDetails = async (req, res) => {
   }
 };
 
+
 export const getAccountById = async (req, res) => {
   const { id } = req.params;
-  if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "Invalid account ID");
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return fail(res, 400, "Invalid account ID");
+  }
 
   try {
     const account = await BankAccount.findById(id);
-    if (!account) return fail(res, 404, "Account not found");
 
-    // Customers may only view their own account; staff and admin can view any.
+    if (!account) {
+      return fail(res, 404, "Account not found");
+    }
+
+    // Customers can only view their own accounts.
     if (
       req.user.role === "customer" &&
       account.owner?.toString() !== req.user._id.toString()
@@ -104,12 +119,21 @@ export const getAccountById = async (req, res) => {
       return fail(res, 403, "Forbidden");
     }
 
-    res.status(200).json({ success: true, data: formatAccount(account) });
+    // Only customers and staff should reach this endpoint.
+    if (!["customer", "staff"].includes(req.user.role)) {
+      return fail(res, 403, "Forbidden");
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: formatAccount(account),
+    });
   } catch (err) {
     console.error("Get account by id error:", err);
-    fail(res, 500, "Unable to fetch account");
+    return fail(res, 500, "Unable to fetch account");
   }
 };
+
 
 const getInitials = (name = "") =>
   name
@@ -131,7 +155,7 @@ export const lookupAccount = async (req, res) => {
   if (!accountNumber) return fail(res, 400, "Account number must be a 12-digit number");
 
   try {
-    const account = await BankAccount.findOne({ accountNumber }).populate("owner", "name");
+    const account = await BankAccount.findOne({ accountNumber }).populate("owner", "name status");
     if (!account) return fail(res, 404, "Account not found");
 
     if (account.owner?._id?.toString() === req.user._id.toString()) {
@@ -139,6 +163,9 @@ export const lookupAccount = async (req, res) => {
     }
     if (account.status !== "active") {
       return fail(res, 403, "Recipient account cannot receive money");
+    }
+    if (!account.owner || account.owner.status !== "active") {
+      return fail(res, 403, "Recipient user account is not active and cannot receive money");
     }
 
     const ownerName = account.owner?.name ?? "";
@@ -153,6 +180,66 @@ export const lookupAccount = async (req, res) => {
   } catch (err) {
     console.error("Lookup account error:", err);
     fail(res, 500, "Unable to look up account");
+  }
+};
+
+export const getRecentRecipients = async (req, res) => {
+  const limit = Math.min(20, Math.max(1, parseInt(req.query.limit, 10) || 3));
+
+  try {
+    const account = await getOrCreateAccount(req.user._id);
+
+    const recentGroups = await Transaction.aggregate([
+      {
+        $match: {
+          sourceAccount: account._id,
+          transactionType: "transfer",
+          status: { $in: ["completed", "pending"] },
+          destinationAccount: { $ne: null },
+        },
+      },
+      {
+        $group: {
+          _id: "$destinationAccount",
+          lastTransferAt: { $max: "$createdAt" },
+        },
+      },
+      { $sort: { lastTransferAt: -1 } },
+      { $limit: limit * 2 },
+    ]);
+
+    const destIds = recentGroups.map((g) => g._id);
+    if (!destIds.length) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+
+    const destAccounts = await BankAccount.find({
+      _id: { $in: destIds },
+      status: "active",
+    })
+      .populate("owner", "name status")
+      .lean();
+
+    const activeDestAccounts = destAccounts.filter((a) => a.owner?.status === "active");
+
+    const byId = new Map(activeDestAccounts.map((acc) => [acc._id.toString(), acc]));
+    const result = [];
+    for (const group of recentGroups) {
+      const acc = byId.get(group._id.toString());
+      if (!acc) continue;
+      const ownerName = acc.owner?.name ?? "";
+      result.push({
+        accountNumber: acc.accountNumber,
+        displayName: maskName(ownerName),
+        initials: getInitials(ownerName),
+      });
+      if (result.length >= limit) break;
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    console.error("Get recent recipients error:", err);
+    return fail(res, 500, "Unable to fetch recent recipients");
   }
 };
 
@@ -187,10 +274,29 @@ export const freezeAccount = async (req, res) => {
     account.status = "frozen";
     await account.save();
 
-    res.status(200).json({
+    await writeAuditLog({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      action: "ACCOUNT_FROZEN",
+      targetType: "BankAccount",
+      targetId: account._id,
+      outcome: "success",
+      metadata: {},
+    });
+
+    await createNotification({
+      recipient: account.owner?._id ?? account.owner,
+      type: "account",
+      message: `Your ${accountEnding(account.accountNumber)} has been frozen. Reason: ${reason}. Please contact staff for assistance.`,
+    });
+
+    return res.status(200).json({
       success: true,
       message: "Account frozen successfully",
-      data: account,
+      data: {
+        id: account._id,
+        status: account.status,
+      },
     });
   } catch (err) {
     console.error("Freeze account error:", err);
@@ -223,11 +329,31 @@ export const unfreezeAccount = async (req, res) => {
     account.status = "active";
     await account.save();
 
-    res.status(200).json({
+    await writeAuditLog({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      action: "ACCOUNT_UNFROZEN",
+      targetType: "BankAccount",
+      targetId: account._id,
+      outcome: "success",
+      metadata: {},
+    });
+
+    await createNotification({
+      recipient: account.owner?._id ?? account.owner,
+      type: "account",
+      message: `Your ${accountEnding(account.accountNumber)} has been reactivated. You can now cash in and transfer funds.`,
+    });
+
+    return res.status(200).json({
       success: true,
       message: "Account unfrozen successfully",
-      data: account,
+      data: {
+        id: account._id,
+        status: account.status,
+      },
     });
+    
   } catch (err) {
     console.error("Unfreeze account error:", err);
     fail(res, 500, "Unable to unfreeze account");
