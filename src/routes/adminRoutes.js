@@ -5,6 +5,7 @@ import {
   createStaff,
   updateStaffStatus,
   getAdminUsers,
+  getAdminUserById,
   getAdminAuditLogs,
 } from "../controllers/adminController.js";
 import { protect, authorize } from "../middleware/auth.js";
@@ -23,6 +24,12 @@ router.get(
   "/users", 
   authorize("admin"), 
   getAdminUsers
+);
+
+router.get(
+  "/users/:id",
+  authorize("admin"),
+  getAdminUserById
 );
 
 router.get(

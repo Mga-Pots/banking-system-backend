@@ -172,7 +172,7 @@ export const updateCustomerStatus = async (req, res) => {
     return fail(res, 400, "Invalid customer ID");
   }
 
-  if (!["active", "deactivated", "disabled", "closed"].includes(status)) {
+  if (status !== "closed") {
     return fail(res, 400, "Invalid account status");
   }
 
@@ -257,7 +257,7 @@ export const updateCustomerStatus = async (req, res) => {
     await writeAuditLog({
       actor: req.user._id,
       actorRole: req.user.role,
-      action: status === "closed" ? "ACCOUNT_CLOSED" : "Customer Status Updated",
+      action: "ACCOUNT_CLOSED",
       targetType: "User",
       targetId: customer._id,
       outcome: "success",

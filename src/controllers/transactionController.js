@@ -2,6 +2,7 @@ import { randomInt } from "node:crypto";
 import mongoose from "mongoose";
 import BankAccount from "../models/BankAccount.js";
 import Transaction from "../models/Transaction.js";
+import User from "../models/User.js";
 import { getOrCreateAccount, normalizeAccountNumber } from "../utils/account.js";
 import { createNotification, formatPeso, accountEnding } from "../utils/notification.js";
 import { writeAuditLog } from "../utils/auditLog.js";
@@ -297,6 +298,14 @@ const MAX_LIMIT = 100;
 
 const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// "500", "1,250.50" or "₱500" → centavos (integer math), or null if it isn't an amount.
+const pesosToCentavos = (text) => {
+  const clean = String(text ?? "").replace(/[,\s₱]/g, "");
+  if (!/^\d{1,9}(\.\d{1,2})?$/.test(clean)) return null;
+  const [whole, fraction = ""] = clean.split(".");
+  return Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
+};
+
 const idOf = (value) => value?._id ?? value ?? null;
 const sameId = (a, b) => a != null && b != null && String(idOf(a)) === String(idOf(b));
 
@@ -370,9 +379,12 @@ export const getTransactions = async (req, res) => {
       clauses.push({ createdAt: { $gte: new Date(Date.now() - Number(periodRaw) * 86400000) } });
     } // anything else (including "all") is ignored
 
-    const search = String(query.search ?? query.q ?? "").trim().replace(/\s+/g, "");
+    const rawSearch = String(query.search ?? query.q ?? "").trim().replace(/\s+/g, " ");
+    const search = rawSearch.replace(/\s/g, "");
     if (search) {
       const or = [{ referenceNumber: { $regex: escapeRegex(search), $options: "i" } }];
+
+      // Other accounts by (part of) their account number.
       if (/^\d+$/.test(search)) {
         const matched = await BankAccount.find({
           accountNumber: { $regex: escapeRegex(search) },
@@ -385,6 +397,34 @@ export const getTransactions = async (req, res) => {
           or.push({ sourceAccount: { $in: ids } }, { destinationAccount: { $in: ids } });
         }
       }
+
+      // The amount, typed in pesos.
+      const centavos = pesosToCentavos(search);
+      if (centavos !== null && centavos > 0) or.push({ amount: centavos });
+
+      // A recipient's first name: one word, matched at the start of the name only.
+      // Customers only see "Juan C.", so surnames and incoming senders stay hidden.
+      // The visibility clause above still limits results to this customer's own transactions.
+      if (/^\p{L}{2,}$/u.test(rawSearch)) {
+        const owners = await User.find({
+          name: { $regex: "^" + escapeRegex(rawSearch), $options: "i" },
+        })
+          .select("_id")
+          .lean();
+        if (owners.length) {
+          const named = await BankAccount.find({
+            owner: { $in: owners.map((o) => o._id) },
+            _id: { $ne: account._id },
+          })
+            .select("_id")
+            .lean();
+          if (named.length) {
+            // Outgoing only: transfers this customer sent to those accounts.
+            or.push({ destinationAccount: { $in: named.map((a) => a._id) } });
+          }
+        }
+      }
+
       clauses.push({ $or: or });
     }
 

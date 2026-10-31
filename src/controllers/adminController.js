@@ -104,12 +104,7 @@ export const updateStaffStatus = async (req, res) => {
     return fail(res, 400, "Invalid Staff ID.");
   }
 
-  const allowedStatuses = [
-    "active",
-    "deactivated",
-    "disabled",
-    "closed",
-  ];
+  const allowedStatuses = ["closed"];
 
   if (!allowedStatuses.includes(status)) {
     return fail(res, 400, "Invalid account status.");
@@ -176,6 +171,30 @@ export const updateStaffStatus = async (req, res) => {
     return fail(res, 500, "Unable to update Staff status.");
   } finally {
     await session.endSession();
+  }
+};
+
+export const getAdminUserById = async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.isValidObjectId(id)) {
+    return fail(res, 400, "Invalid user ID");
+  }
+
+  try {
+    // Includes closed users. Identity fields only: no money data.
+    const user = await User.findById(id)
+      .select("_id name email contactNumber role status isVerified createdAt updatedAt")
+      .lean();
+
+    if (!user) {
+      return fail(res, 404, "User not found");
+    }
+
+    return res.status(200).json({ success: true, data: publicUser(user) });
+  } catch (err) {
+    console.error("Get admin user by ID error:", err);
+    return fail(res, 500, "Unable to retrieve user");
   }
 };
 
