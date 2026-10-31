@@ -30,7 +30,19 @@ app.use(
 );
 app.use(express.json());
 
+// Root & Health Status Routes
+app.get("/", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "SINOP Backend API is running successfully on Render.",
+    environment: process.env.NODE_ENV || "development",
+    healthCheck: "/api/health",
+  });
+});
+
 app.get("/api/health", (req, res) => res.json({ success: true, data: { status: "ok" } }));
+
+// API Endpoints
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/transactions", transactionRoutes);
@@ -39,8 +51,10 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/staff", staffRoutes);
 
+// 404 Catch-All Handler
 app.use((req, res) => res.status(404).json({ success: false, message: "Route not found" }));
 
+// Global Error Handler
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ success: false, message: "Server error" });
