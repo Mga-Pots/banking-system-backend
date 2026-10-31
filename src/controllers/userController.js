@@ -80,7 +80,7 @@ export const updateMe = async (req, res) => {
   try {
     const existingEmail = await User.exists({
       email: trimmedEmail,
-      isClosed: false,
+      isClosed: { $ne: true },
       _id: { $ne: req.user._id },
     });
     if (existingEmail) {
@@ -90,7 +90,7 @@ export const updateMe = async (req, res) => {
     if (normalizedContact) {
       const existingContact = await User.exists({
         contactNumber: normalizedContact,
-        isClosed: false,
+        isClosed: { $ne: true },
         _id: { $ne: req.user._id },
       });
       if (existingContact) {

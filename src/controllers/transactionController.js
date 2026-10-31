@@ -718,7 +718,7 @@ export const approveTransfer = async (req, res) => {
       await writeAuditLog({
         actor: req.user._id,
         actorRole: req.user.role,
-        action: "Transfer Approved",
+        action: "TRANSACTION_APPROVED",
         targetType: "Transaction",
         targetId: txn._id,
         outcome: "success",
@@ -843,7 +843,7 @@ export const rejectTransfer = async (req, res) => {
       await writeAuditLog({
         actor: req.user._id,
         actorRole: req.user.role,
-        action: "Transfer Rejected",
+        action: "TRANSACTION_REJECTED",
         targetType: "Transaction",
         targetId: txn._id,
         outcome: "success",
@@ -1045,7 +1045,7 @@ export const flagTransfer = async (req, res) => {
       await writeAuditLog({
         actor: req.user._id,
         actorRole: req.user.role,
-        action: "Transfer Flagged",
+        action: "TRANSACTION_FLAGGED",
         targetType: "Transaction",
         targetId: txn._id,
         outcome: "success",

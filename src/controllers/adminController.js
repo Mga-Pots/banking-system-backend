@@ -189,7 +189,7 @@ export const getAdminUsers = async (req, res) => {
   const skip = (page - 1) * limit;
 
   try {
-    const filter = { isClosed: false };
+    const filter = {};
 
     const [users, total] = await Promise.all([
       User.find(filter)

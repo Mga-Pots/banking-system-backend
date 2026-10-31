@@ -4,10 +4,27 @@ import BankAccount from "../models/BankAccount.js";
 import Transaction from "../models/Transaction.js";
 import { writeAuditLog } from "../utils/auditLog.js";
 import { publicUser } from "../utils/user.js";
+import { createNotification } from "../utils/notification.js";
 
 const fail = (res, code, message) =>
   res.status(code).json({ success: false, message });
 
+// What staff see about a customer: identity fields and their bank account.
+// No role or notification preferences. The balance is only on the detail view.
+const staffCustomerView = (user, account, { withBalance = false } = {}) => {
+  const { role, notificationPreferences, ...view } = publicUser(user);
+  return {
+    ...view,
+    account: account
+      ? {
+          _id: account._id,
+          accountNumber: account.accountNumber,
+          status: account.status,
+          ...(withBalance && { balance: account.balance }),
+        }
+      : null,
+  };
+};
 
 export const getStaffCustomers = async (req, res) => {
   try {
@@ -16,9 +33,16 @@ export const getStaffCustomers = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
+    const accounts = await BankAccount.find({
+      owner: { $in: customers.map((c) => c._id) },
+    })
+      .select("accountNumber status owner")
+      .lean();
+    const byOwner = new Map(accounts.map((a) => [String(a.owner), a]));
+
     return res.status(200).json({
       success: true,
-      data: customers.map(publicUser),
+      data: customers.map((c) => staffCustomerView(c, byOwner.get(String(c._id)))),
     });
   } catch (err) {
     console.error("Get staff customers error:", err);
@@ -52,9 +76,13 @@ export const getStaffCustomerById = async (req, res) => {
       );
     }
 
+    const account = await BankAccount.findOne({ owner: customer._id })
+      .select("accountNumber status balance")
+      .lean();
+
     return res.status(200).json({
       success: true,
-      data: publicUser(customer),
+      data: staffCustomerView(customer, account, { withBalance: true }),
     });
   } catch (err) {
     console.error("Get staff customer by ID error:", err);
@@ -80,13 +108,29 @@ export const verifyCustomer = async (req, res) => {
       return fail(res, 404, "Customer not found");
     }
 
+    const wasVerified = customer.isVerified;
     customer.isVerified = true;
     await customer.save();
+
+    // Notify only on the first verification, not on a repeat call.
+    if (!wasVerified) {
+      // A failed notification must not fail the verification or skip the audit log.
+      try {
+        await createNotification({
+          recipient: customer._id,
+          type: "account",
+          message:
+            "Your account is verified. You can now transfer money and view your card details.",
+        });
+      } catch (err) {
+        console.error("Verify notification error:", err);
+      }
+    }
 
     await writeAuditLog({
       actor: req.user._id,
       actorRole: req.user.role,
-      action: "Customer Verified",
+      action: "CUSTOMER_VERIFIED",
       targetType: "User",
       targetId: customer._id,
       outcome: "success",
@@ -182,7 +226,7 @@ export const updateCustomerStatus = async (req, res) => {
 
       // Reject closure if a transaction is still pending.
       const pendingTransaction = await Transaction.exists({
-        status: "pending",
+        status: { $in: ["pending", "flagged"] },
         $or: [
           { sourceAccount: bankAccount._id },
           { destinationAccount: bankAccount._id },
@@ -213,7 +257,7 @@ export const updateCustomerStatus = async (req, res) => {
     await writeAuditLog({
       actor: req.user._id,
       actorRole: req.user.role,
-      action: "Customer Status Updated",
+      action: status === "closed" ? "ACCOUNT_CLOSED" : "Customer Status Updated",
       targetType: "User",
       targetId: customer._id,
       outcome: "success",

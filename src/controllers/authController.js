@@ -33,7 +33,7 @@ export const register = async (req, res) => {
   try {
     const existingEmail = await User.exists({
       email: normalizedEmail,
-      isClosed: false,
+      isClosed: { $ne: true },
     });
 
     if (existingEmail) {
@@ -43,7 +43,7 @@ export const register = async (req, res) => {
     if (contactNumber) {
       const existingContact = await User.exists({
         contactNumber,
-        isClosed: false,
+        isClosed: { $ne: true },
       });
 
       if (existingContact) {
@@ -88,7 +88,7 @@ export const login = async (req, res) => {
 
     const user = await User.findOne({
       email: email.toLowerCase().trim(),
-      isClosed: false,
+      isClosed: { $ne: true },
     });
 
     if (!user) {

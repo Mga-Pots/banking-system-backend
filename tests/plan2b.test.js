@@ -572,7 +572,12 @@ test("protect: deactivated user is blocked on subsequent requests with 401", asy
 test("staffController: publicUser omits contactNumber when unset in list and by-ID", async () => {
   const originalFind = User.find;
   const originalFindById = User.findById;
+  const originalBankFind = BankAccount.find;
+  const originalBankFindOne = BankAccount.findOne;
   const customerId = new mongoose.Types.ObjectId();
+
+  BankAccount.find = () => ({ select: () => ({ lean: () => Promise.resolve([]) }) });
+  BankAccount.findOne = () => ({ select: () => ({ lean: () => Promise.resolve(null) }) });
 
   const mockCustomer = {
     _id: customerId,
@@ -616,6 +621,8 @@ test("staffController: publicUser omits contactNumber when unset in list and by-
   } finally {
     User.find = originalFind;
     User.findById = originalFindById;
+    BankAccount.find = originalBankFind;
+    BankAccount.findOne = originalBankFindOne;
   }
 });
 

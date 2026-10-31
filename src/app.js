@@ -8,11 +8,22 @@ import adminRoutes from "./routes/adminRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import staffRoutes from "./routes/staffRoutes.js";
 
+// CLIENT_URL may list several origins separated by commas.
+// One origin stays a plain string; none leaves cors at its default, as before.
+export const parseClientOrigins = (value) => {
+  const list = String(value ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+  if (list.length === 0) return undefined;
+  return list.length === 1 ? list[0] : list;
+};
+
 const app = express();
 
 app.use(
   cors({
-    origin: process.env.CLIENT_URL,
+    origin: parseClientOrigins(process.env.CLIENT_URL),
     exposedHeaders: ["X-Total-Count", "X-Unread-Count", "X-Cache-Lookup"],
     allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key", "X-Idempotency-Key"],
   })
